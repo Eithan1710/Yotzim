@@ -141,7 +141,7 @@ function makeSupabase(url,key){
     firstDone=true;
     const sig=JSON.stringify(events);
     if(sig===lastSig)return;
-    lastSig=sig;cache=events;emit();
+    lastSig=sig;cache=events;LS.set('yotz.cache.v1',sig);emit();
   }
   async function write(opt,fn){
     pending++;
@@ -152,6 +152,7 @@ function makeSupabase(url,key){
   return{
     subscribe(cb,onErr){
       onE=cb;
+      try{const c=JSON.parse(LS.get('yotz.cache.v1')||'null');if(c&&typeof c==='object'){cache=c;emit()}}catch(e){}
       const tick=()=>pull().catch(err=>{if(!firstDone)onErr(err)});
       tick();
       setInterval(()=>{if(!document.hidden)tick()},5000);
@@ -407,15 +408,15 @@ let form=null;
 function openForm(){
   if(!state.ready||!me){toast('רגע, הלוח נטען');return}
   const d=new Date(Math.ceil((Date.now()+10*60e3)/(30*60e3))*(30*60e3));
-  form={kind:null,transport:'unknown',dm:d.getDate()===new Date().getDate()?'today':'tomorrow'};
+  form={kind:null,transport:has(TRANSPORT,LS.get('yotz.tr'))?LS.get('yotz.tr'):'unknown',dm:d.getDate()===new Date().getDate()?'today':'tomorrow'};
   const kinds=Object.entries(KINDS).map(([k,v])=>`<button class="opt" data-act="kind" data-v="${k}"><span class="e">${v.e}</span>${v.t}</button>`).join('');
   const trs=Object.entries(TRANSPORT).map(([k,v])=>`<button class="ch" data-act="tr" data-v="${k}">${v.e} ${v.t}</button>`).join('');
   openSheet(`<div class="grab"></div>
     <div class="dhead"><h2 class="dt">יציאה חדשה</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
-    <div class="pad">
+    <div>
       <div class="fl">מה עושים?</div><div class="kinds">${kinds}</div>
       <div class="fl">איפה?</div>
-      <input class="txt" id="f-place" maxlength="60" placeholder="לאגר הוד השרון" autocomplete="off" enterkeyhint="done">
+      <input class="txt" id="f-place" maxlength="60" placeholder="לאגר הוד השרון (לא חובה)" autocomplete="off" enterkeyhint="done">
       <div class="fl">מתי?</div>
       <div class="row">
         <button class="ch" data-act="dm" data-v="today">היום</button>
@@ -424,7 +425,7 @@ function openForm(){
       </div>
       <div class="dtrow"><input class="txt" type="date" id="f-date" hidden><input class="txt" type="time" id="f-time"></div>
       <div class="fl">איך מגיעים?</div><div class="row">${trs}</div>
-      <button class="submit" id="f-submit" data-act="submit" disabled>צור יציאה</button>
+      <div class="formbar"><button class="submit" id="f-submit" data-act="submit" disabled>צור יציאה</button></div>
     </div>`);
   view={type:'form'};
   $('#f-time').value=hhmm(d);
@@ -438,11 +439,12 @@ function syncForm(){
   });
   mark('kind',form.kind);mark('dm',form.dm);mark('tr',form.transport);
   $('#f-date').hidden=form.dm!=='custom';
-  $('#f-submit').disabled=!(form.kind&&$('#f-place').value.trim());
+  $('#f-submit').disabled=!(form.kind&&(form.kind!=='other'||$('#f-place').value.trim()));
 }
 function submitForm(){
-  const place=$('#f-place').value.trim();
-  if(!form||!form.kind||!place)return;
+  if(!form||!form.kind)return;
+  const place=$('#f-place').value.trim()||(form.kind==='other'?'':KINDS[form.kind].t);   // no place typed: use the activity name
+  if(!place)return;
   const t=($('#f-time').value||'21:00').split(':').map(Number);
   const base=new Date();
   if(form.dm==='tomorrow')base.setDate(base.getDate()+1);
@@ -455,6 +457,7 @@ function submitForm(){
   const when=base.getTime();
   if(when<Date.now()-30*60e3){toast('השעה הזו כבר עברה');return}
   const ev={kind:form.kind,place,when,transport:form.transport,rsvps:{[me.id]:'yes'}};
+  LS.set('yotz.tr',form.transport);
   closeSheet();
   enqueue(()=>store.addEvent(ev)).then(()=>toast('היציאה נוצרה 🎉')).catch(writeFail);
 }

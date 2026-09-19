@@ -43,7 +43,7 @@ button{font:inherit;color:inherit;border:0;background:none;cursor:pointer;paddin
 h2.sec{font:400 19px/1 var(--display);margin:26px 2px 12px}
 
 /* ---------- Next outing: the one bold thing ---------- */
-.hero{background:hsl(var(--h) 92% 72%);color:var(--hero-ink);border-radius:28px;padding:20px 18px 18px}
+.hero{background:hsl(var(--h) 92% 72%);color:var(--hero-ink);border-radius:28px;padding:20px 18px 18px;margin-bottom:12px}
 .info{cursor:pointer;display:block}
 .hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
 .hero .emo{font-size:46px;line-height:1}
@@ -186,3 +186,7 @@ html.standalone body::before{content:"";position:fixed;top:0;left:0;right:0;heig
 .tg{width:42px;height:26px;border-radius:99px;background:var(--yes);position:relative;display:inline-block;flex:none}
 .tg::after{content:"";position:absolute;top:3px;right:3px;width:20px;height:20px;border-radius:50%;background:#fff}
 .appic{width:26px;height:26px;border-radius:7px;background:hsl(38 92% 72%);color:var(--hero-ink);display:inline-grid;place-items:center;font-weight:800}
+
+/* ---------- create form: the button is always visible ---------- */
+.formbar{position:sticky;bottom:0;background:var(--surface);margin:10px -18px 0;padding:12px 18px calc(14px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line)}
+.formbar .submit{margin-top:0}
