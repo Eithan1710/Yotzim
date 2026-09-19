@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>יוצאים?</title>
+
+<!-- PWA: manifest + icons + iOS tags. All paths are relative so it works on GitHub Pages sub-paths. -->
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="theme-color" content="#ECEEF5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#12131C" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="יוצאים">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<script>
+  // Mark the page as "opened from the home screen" as early as possible
+  if (navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)) {
+    document.documentElement.classList.add('standalone');
+  }
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;600;800&family=Secular+One&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="app" id="app"></main>
+<button class="fab" data-act="new">+ יציאה</button>
+<div class="toast" id="toast" hidden></div>
+
+<script src="config.js"></script>
+<script src="script.js"></script>
+</body>
+</html>

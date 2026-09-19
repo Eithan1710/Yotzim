@@ -1,0 +1,19 @@
+{
+  "id": "./",
+  "name": "יוצאים? – לוח היציאות של החבורה",
+  "short_name": "יוצאים",
+  "description": "מי יוצא, לאן ומתי. לוח היציאות של החבורה.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "lang": "he",
+  "dir": "rtl",
+  "background_color": "#ECEEF5",
+  "theme_color": "#ECEEF5",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
