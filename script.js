@@ -374,6 +374,17 @@ function grp(cls,emoji,label,list){
     :'<span class="dash">—</span>';
   return `<div class="grp"><div class="gh">${emoji} ${label} <span class="n">${list.length}</span></div><div class="pills">${pills}</div></div>`;
 }
+const shareBtn=ev=>`<button class="wa" data-act="share" data-id="${esc(ev.id)}">💬 שתפו בוואטסאפ</button>`;
+function shareText(ev){
+  const k=KINDS[ev.kind],d=new Date(ev.when);
+  const link=(window.APP_CONFIG&&window.APP_CONFIG.SHARE_URL)||(IS_NATIVE?'':location.href.split('#')[0]);
+  return [k.e+' '+ev.place,'📅 יום '+DAYS[d.getDay()]+' '+ddmm(d)+' · '+hhmm(d),trText(ev)||null,'מי מגיע? סמנו כאן 👇',link]
+    .filter(Boolean).join('\n');
+}
+function shareEvent(id){
+  const ev=state.events.find(e=>e.id===id);if(!ev)return;
+  window.open('https://wa.me/?text='+encodeURIComponent(shareText(ev)),'_blank','noopener');
+}
 const delBtn=ev=>`<button class="del" data-act="del" data-id="${esc(ev.id)}">🗑️ מחק יציאה</button>`;
 function detailHTML(ev){
   const k=KINDS[ev.kind],g=groups(ev),my=ev.rsvps[myId()],d=new Date(ev.when);
@@ -385,7 +396,7 @@ function detailHTML(ev){
   if(isPast){
     h+=grp('yes','🟢','הגיעו',g.yes)+delBtn(ev)+'<div class="pad"></div>';
   }else{
-    h+=grp('yes','🟢','מגיעים',g.yes)+grp('maybe','🟡','אולי',g.maybe)
+    h+=shareBtn(ev)+grp('yes','🟢','מגיעים',g.yes)+grp('maybe','🟡','אולי',g.maybe)
       +grp('none','⚪','עדיין לא ענו',g.none)+grp('no','🔴','לא מגיעים',g.no)+delBtn(ev)
       +`<div class="rsvpbar">${btns(ev,my,'sb','לא מגיע')}</div>`;
   }
@@ -423,6 +434,7 @@ function openForm(){
         <button class="ch" data-act="dm" data-v="tomorrow">מחר</button>
         <button class="ch" data-act="dm" data-v="custom">📅 תאריך אחר</button>
       </div>
+      <div class="row" style="margin-top:10px">${['20:00','21:00','22:00'].map(t=>`<button class="ch" data-act="tm" data-v="${t}">${t}</button>`).join('')}</div>
       <div class="dtrow"><input class="txt" type="date" id="f-date" hidden><input class="txt" type="time" id="f-time"></div>
       <div class="fl">איך מגיעים?</div><div class="row">${trs}</div>
       <div class="formbar"><button class="submit" id="f-submit" data-act="submit" disabled>צור יציאה</button></div>
@@ -437,7 +449,7 @@ function syncForm(){
   const mark=(act,val)=>sheetEl.querySelectorAll('[data-act="'+act+'"]').forEach(b=>{
     const on=b.dataset.v===val;b.classList.toggle('on',on);b.setAttribute('aria-pressed',on);
   });
-  mark('kind',form.kind);mark('dm',form.dm);mark('tr',form.transport);
+  mark('kind',form.kind);mark('dm',form.dm);mark('tr',form.transport);mark('tm',$('#f-time').value);
   $('#f-date').hidden=form.dm!=='custom';
   $('#f-submit').disabled=!(form.kind&&(form.kind!=='other'||$('#f-place').value.trim()));
 }
@@ -540,13 +552,16 @@ document.addEventListener('click',e=>{
   else if(a==='rename')openRename();
   else if(a==='rename-save')saveRename();
   else if(a==='del')deleteEvent(el);
+  else if(a==='share')shareEvent(id);
+  else if(a==='tm'){$('#f-time').value=el.dataset.v;syncForm()}
   else if(a==='install')doInstall();
   else if(a==='copy-link')copyLink();
   else if(a==='guide-done'){markInstalled();closeSheet();toast('מעולה! חפשו את יוצאים במסך הבית')}
   else if(a==='ob-add'){const o=$('#ob');if(o)o.remove();showGate();openGuide()}
   else if(a==='ob-skip'){const o=$('#ob');if(o)o.remove();showGate()}
 });
-document.addEventListener('input',e=>{if(e.target.id==='f-place')syncForm()});
+document.addEventListener('input',e=>{if(e.target.id==='f-place'||e.target.id==='f-time')syncForm()});
+document.addEventListener('change',e=>{if(e.target.id==='f-time')syncForm()});
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape')closeSheet();
   if(e.key==='Enter'&&e.target.id==='g-name'){e.preventDefault();submitGate()}
