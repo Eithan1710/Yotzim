@@ -383,7 +383,7 @@ function shareText(ev){
 }
 function shareEvent(id){
   const ev=state.events.find(e=>e.id===id);if(!ev)return;
-  window.open('https://wa.me/?text='+encodeURIComponent(shareText(ev)),'_blank','noopener');
+  window.open('https://api.whatsapp.com/send?text='+encodeURIComponent(shareText(ev)),'_blank','noopener');
 }
 const delBtn=ev=>`<button class="del" data-act="del" data-id="${esc(ev.id)}">🗑️ מחק יציאה</button>`;
 function detailHTML(ev){
