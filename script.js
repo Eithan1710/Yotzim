@@ -190,6 +190,14 @@ const IS_STANDALONE=navigator.standalone===true||!!(window.matchMedia&&window.ma
 // Real Safari, not Chrome/Firefox/Edge on iOS and not the in-app browsers of Facebook, Instagram etc.
 const IS_SAFARI=IS_IOS&&/Safari/.test(UA)&&!/CriOS|FxiOS|EdgiOS|OPiOS|OPT\/|GSA\/|FBAN|FBAV|FB_IAB|Instagram|Line\/|Twitter|MicroMessenger|TikTok|Bytedance|musical_ly|Snapchat|Telegram/.test(UA);
 const SAFARI_VER=Number((UA.match(/Version\/(\d+)/)||[0,0])[1]);
+const IS_ANDROID=/Android/.test(UA);
+const IS_MOBILE=IS_IOS||IS_ANDROID;
+// Facebook/Instagram/WhatsApp-style in-app browsers on Android can't install anything
+const IS_ANDROID_INAPP=IS_ANDROID&&/; wv\)|FBAN|FBAV|Instagram|Line\/|Twitter|MicroMessenger|TikTok|Bytedance|Snapchat|Telegram/.test(UA);
+const IS_SAMSUNG=IS_ANDROID&&/SamsungBrowser/.test(UA);
+const IS_FIREFOX_ANDROID=IS_ANDROID&&/Firefox/.test(UA);
+// iPhone/iPad: "add to home screen" (manual). Android/desktop: "install app" (native prompt when the browser offers it).
+const installLabel=()=>IS_IOS?'📱 הוסף את יוצאים למסך הבית':'📲 התקן את יוצאים כאפליקציה';
 let deferredPrompt=null;                       // Android / desktop Chrome & Edge native install prompt
 let installed=LS.get('yotz.installed')==='1';
 const canShowInstall=()=>!IS_NATIVE&&!IS_STANDALONE;
@@ -197,8 +205,8 @@ const canShowInstall=()=>!IS_NATIVE&&!IS_STANDALONE;
 function installUI(){
   if(!canShowInstall())return '';
   if(installed)return '<div class="inst-done">✓ יוצאים כבר מותקן אצלך</div>';
-  if(IS_IOS||deferredPrompt){
-    return '<button class="install" data-act="install"><span>📱 הוסף את יוצאים למסך הבית</span><span class="chev" aria-hidden="true">‹</span></button>';
+  if(IS_MOBILE||deferredPrompt){
+    return '<button class="install" data-act="install"><span>'+installLabel()+'</span><span class="chev" aria-hidden="true">‹</span></button>';
   }
   return '';
 }
@@ -209,7 +217,7 @@ async function doInstall(){
     try{p.prompt();const r=await p.userChoice;if(r&&r.outcome==='accepted')markInstalled()}catch(e){}
     render();return;
   }
-  if(IS_IOS)openGuide();                       // iOS has no built-in prompt: show the guide
+  if(IS_MOBILE)openGuide();                    // no built-in prompt available (always the case on iOS): show the guide
 }
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;render()});
 window.addEventListener('appinstalled',()=>{deferredPrompt=null;markInstalled()});
@@ -217,7 +225,45 @@ window.addEventListener('appinstalled',()=>{deferredPrompt=null;markInstalled()}
 const SHARE_SVG='<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3"/><path d="M8 7l4-4 4 4"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg>';
 const gstep=(n,title,vis)=>`<div class="gstep"><div class="gnum">${n}</div><div class="gbody"><div class="gtitle">${title}</div>${vis}</div></div>`;
 
+function androidGuideHTML(){
+  const top=`<div class="grab"></div><div class="dhead"><h2 class="dt">התקנת האפליקציה</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>`;
+  if(IS_ANDROID_INAPP){
+    const url=esc(location.href.split('#')[0]);
+    return top+`<div class="pad"><p class="gp">כדי להתקין צריך לפתוח את האתר ב-<b>Chrome</b>.</p>`
+      +gstep(1,'העתיקו את הקישור',`<input class="txt" readonly value="${url}" aria-label="קישור לאתר"><button class="submit" data-act="copy-link" style="margin-top:12px">העתק קישור</button>`)
+      +gstep(2,'פתחו את Chrome והדביקו את הקישור בשורת הכתובת','')
+      +gstep(3,'חזרו לכאן ולחצו שוב על ״התקן את יוצאים״','')
+      +`</div>`;
+  }
+  let t1,v1,t2,rows,t3;
+  if(IS_SAMSUNG){
+    t1='לחצו על <b>☰</b> (תפריט) בתחתית הדפדפן';
+    v1='<div class="mock"><span class="addr">🔒 יוצאים</span><span class="hl">☰</span></div>';
+    t2='בחרו <b>Add page to</b> ואז <b>Home screen</b> (הוספת דף / מסך הבית)';
+    rows='<div class="mrow dim"><span>Bookmarks</span></div><div class="mrow hl"><span>Add page to → Home screen</span><span>⊞</span></div><div class="mrow dim"><span>Settings</span></div>';
+    t3='לחצו <b>Add</b> (הוסף)';
+  }else if(IS_FIREFOX_ANDROID){
+    t1='לחצו על <b>⋮</b> (שלוש נקודות) בפינה של הדפדפן';
+    v1='<div class="mock"><span class="addr">🔒 יוצאים</span><span class="hl">⋮</span></div>';
+    t2='בחרו <b>Install</b> (התקנה)';
+    rows='<div class="mrow dim"><span>Settings</span></div><div class="mrow hl"><span>Install <span class="he">(התקנה)</span></span><span>⊞</span></div><div class="mrow dim"><span>Find in page</span></div>';
+    t3='לחצו <b>Add</b> (הוסף)';
+  }else{
+    t1='לחצו על <b>⋮</b> (שלוש נקודות) בפינה העליונה של הדפדפן';
+    v1='<div class="mock"><span class="addr">🔒 יוצאים</span><span class="hl">⋮</span></div>';
+    t2='בחרו <b>Install app</b> (התקנת אפליקציה). אם אין, בחרו <b>Add to Home screen</b> (הוספה למסך הבית)';
+    rows='<div class="mrow dim"><span>Share…</span></div><div class="mrow hl"><span>Install app <span class="he">(התקנת אפליקציה)</span></span><span>⊞</span></div><div class="mrow dim"><span>Find in page</span></div>';
+    t3='לחצו <b>Install</b> (התקנה) ואשרו';
+  }
+  const v2=`<div class="mock menu">${rows}</div>`;
+  const v3=`<div class="mock dlg"><div class="dr"><span class="appic">?</span><span>יוצאים</span></div><div class="dh"><span class="dim">Cancel</span><span class="hl">${IS_SAMSUNG||IS_FIREFOX_ANDROID?'Add':'Install'}</span></div></div>`;
+  return top+`<div class="pad">`+gstep(1,t1,v1)+gstep(2,t2,v2)+gstep(3,t3,v3)
+    +`<p class="gnote">האתר נפתח בתוך אפליקציה אחרת (למשל וואטסאפ)? פתחו אותו ב-Chrome ואז חזרו לכאן.</p>
+      <button class="submit" data-act="guide-done">התקנתי ✓</button></div>`;
+}
+
 function guideHTML(){
+  if(IS_ANDROID)return androidGuideHTML();
   const top=`<div class="grab"></div><div class="dhead"><h2 class="dt">הוספה למסך הבית</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>`;
   if(!IS_SAFARI){
     const url=esc(location.href.split('#')[0]);
@@ -261,15 +307,15 @@ async function copyLink(){
   catch(e){toast('לא הצלחנו להעתיק. לחצו והחזיקו על הכתובת')}
 }
 
-// First visit on an iPhone/iPad: offer the home-screen install BEFORE asking for a name
-const shouldOnboard=()=>IS_IOS&&canShowInstall()&&!installed&&LS.get('yotz.ob')!=='1';
+// First visit on a phone: offer the install BEFORE asking for a name
+const shouldOnboard=()=>IS_MOBILE&&canShowInstall()&&!installed&&LS.get('yotz.ob')!=='1';
 function showOnboarding(){
   LS.set('yotz.ob','1');
   const g=document.createElement('div');g.className='gate';g.id='ob';
   g.innerHTML=`<div class="gin"><div class="brand">יוצאים?</div>
     <div class="q">📱 רוצה לפתוח את יוצאים כמו אפליקציה?</div>
     <p class="obp">בלי להוריד כלום. לוקח כמה שניות.</p>
-    <button class="submit" data-act="ob-add">הוסף למסך הבית</button>
+    <button class="submit" data-act="ob-add">${IS_IOS?'הוסף למסך הבית':'התקן אפליקציה'}</button>
     <button class="ob-skip" data-act="ob-skip">לא עכשיו</button></div>`;
   document.body.appendChild(g);
 }
@@ -374,16 +420,24 @@ function grp(cls,emoji,label,list){
     :'<span class="dash">—</span>';
   return `<div class="grp"><div class="gh">${emoji} ${label} <span class="n">${list.length}</span></div><div class="pills">${pills}</div></div>`;
 }
-const shareBtn=ev=>`<button class="wa" data-act="share" data-id="${esc(ev.id)}">💬 שתפו בוואטסאפ</button>`;
+const shareBtn=ev=>`<button class="wa" data-act="share" data-id="${esc(ev.id)}">💬 שתפו את היציאה</button>`;
 function shareText(ev){
   const k=KINDS[ev.kind],d=new Date(ev.when);
   const link=(window.APP_CONFIG&&window.APP_CONFIG.SHARE_URL)||(IS_NATIVE?'':location.href.split('#')[0]);
   return [k.e+' '+ev.place,'📅 יום '+DAYS[d.getDay()]+' '+ddmm(d)+' · '+hhmm(d),trText(ev)||null,'מי מגיע? סמנו כאן 👇',link]
     .filter(Boolean).join('\n');
 }
-function shareEvent(id){
+async function shareEvent(id){
   const ev=state.events.find(e=>e.id===id);if(!ev)return;
-  window.open('https://api.whatsapp.com/send?text='+encodeURIComponent(shareText(ev)),'_blank','noopener');
+  const text=shareText(ev);
+  // The phone's own share sheet hands the text over as-is (emojis intact); pick WhatsApp there.
+  if(navigator.share){
+    try{await navigator.share({text});return}
+    catch(e){if(e&&e.name==='AbortError')return}
+  }
+  // No share sheet (e.g. desktop): WhatsApp links corrupt emojis, so send the same text without them.
+  const plain=text.replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu,'').split('\n').map(l=>l.trim()).filter(Boolean).join('\n');
+  window.open('https://api.whatsapp.com/send?text='+encodeURIComponent(plain),'_blank','noopener');
 }
 const delBtn=ev=>`<button class="del" data-act="del" data-id="${esc(ev.id)}">🗑️ מחק יציאה</button>`;
 function detailHTML(ev){
@@ -557,7 +611,7 @@ document.addEventListener('click',e=>{
   else if(a==='install')doInstall();
   else if(a==='copy-link')copyLink();
   else if(a==='guide-done'){markInstalled();closeSheet();toast('מעולה! חפשו את יוצאים במסך הבית')}
-  else if(a==='ob-add'){const o=$('#ob');if(o)o.remove();showGate();openGuide()}
+  else if(a==='ob-add'){const o=$('#ob');if(o)o.remove();showGate();doInstall()}
   else if(a==='ob-skip'){const o=$('#ob');if(o)o.remove();showGate()}
 });
 document.addEventListener('input',e=>{if(e.target.id==='f-place'||e.target.id==='f-time')syncForm()});
