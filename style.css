@@ -193,3 +193,36 @@ html.standalone body::before{content:"";position:fixed;top:0;left:0;right:0;heig
 
 /* ---------- share on WhatsApp ---------- */
 .wa{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;height:46px;margin-top:16px;border-radius:14px;background:var(--yes-bg);color:var(--yes);font-weight:800}
+
+/* ---------- v3: description, calendar/navigate, edit, rides ---------- */
+.descr{margin:14px 0 0;padding:14px;background:var(--chip);border-radius:14px;font-size:15px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+.area{height:auto;min-height:84px;padding:12px 14px;resize:vertical;line-height:1.4;font-family:inherit}
+
+.actrow{display:flex;gap:8px;margin-top:14px}
+.actbtn{flex:1;height:46px;border-radius:14px;background:var(--chip);color:var(--ink);font-weight:800;display:flex;align-items:center;justify-content:center;gap:6px;text-align:center}
+
+.edit{display:block;width:100%;height:48px;margin-top:16px;border-radius:14px;background:var(--chip);color:var(--ink);font-weight:800}
+.cancel{flex:1;height:56px;border-radius:18px;background:var(--chip);color:var(--ink-2);font-weight:700}
+.formbar:has(.cancel){display:flex;gap:8px}
+.formbar:has(.cancel) .submit{flex:1.4;margin-top:0}
+
+.navrow{display:flex;align-items:center;gap:14px;padding:16px 6px;border-bottom:1px solid var(--line);font-weight:700;font-size:17px}
+.navrow:last-child{border-bottom:0}
+.nave{font-size:24px;width:30px;text-align:center;flex:none}
+
+.stepper{display:flex;align-items:center;justify-content:center;gap:22px;margin-top:4px}
+.stbtn{width:52px;height:52px;border-radius:16px;background:var(--chip);font-size:24px;font-weight:800;display:flex;align-items:center;justify-content:center}
+.stval{font:400 30px/1 var(--display);min-width:34px;text-align:center}
+
+.mystatus{background:var(--yes-bg);color:var(--yes);border-radius:14px;padding:12px 14px;font-weight:700;font-size:14.5px;margin-bottom:10px;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.link-btn{color:inherit;font-weight:800;text-decoration:underline;margin-inline-start:auto}
+.ride{background:var(--chip);border-radius:16px;padding:12px 14px;margin-top:10px}
+.rhead{display:flex;justify-content:space-between;align-items:center;gap:8px;font-weight:800}
+.rdrv .you{color:var(--ink-2);font-weight:600}
+.rseats{color:var(--ink-2);font-weight:700;font-size:14px;white-space:nowrap}
+.rmeta{color:var(--ink-2);font-size:14px;font-weight:600;margin-top:4px}
+.pillx{margin-inline-start:6px;font-weight:800;opacity:.7}
+.ridebtn{width:100%;height:44px;margin-top:10px;border-radius:12px;background:var(--surface);color:var(--ink);font-weight:800}
+.ridebtn:disabled{opacity:.5}
+.ridebtn.add{background:hsl(38 92% 72%);color:var(--hero-ink);margin-top:16px}
+.nocar{margin-top:14px}

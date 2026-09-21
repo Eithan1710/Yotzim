@@ -53,6 +53,16 @@ const myId=()=>me?me.id:null;
 /* ---------- state ---------- */
 const state={people:[],events:[],ready:false,mode:null,err:false};
 let store=null;
+// a link from a calendar event (?event=123) opens that outing once the board has loaded and a name is set
+let pendingEventId=null;
+try{pendingEventId=new URLSearchParams(location.search).get('event')||null}catch(e){}
+function maybeOpenDeepLink(){
+  if(!pendingEventId||!me||sheetEl)return;
+  if(!state.events.some(e=>e.id===pendingEventId))return;
+  const id=pendingEventId;pendingEventId=null;
+  try{history.replaceState(null,'',location.pathname+location.hash)}catch(e){}
+  openDetail(id);
+}
 
 function setEvents(o){
   state.events=Object.entries(o).map(([id,v])=>{
@@ -60,15 +70,22 @@ function setEvents(o){
     if(v.rsvps&&typeof v.rsvps==='object'){
       for(const k in v.rsvps){const s=v.rsvps[k];if(s==='yes'||s==='maybe'||s==='no')rs[k]=s}
     }
+    const rides=Array.isArray(v.rides)?v.rides.map(r=>({
+      id:String(r.id),driver:String(r.driver||''),seats:Math.max(0,Number(r.seats)||0),
+      pickup:String(r.pickup||''),note:String(r.note||''),
+      passengers:Array.isArray(r.passengers)?r.passengers.map(String).slice(0,20):[]
+    })).filter(r=>r.driver):[];
     return{id:String(id),kind:has(KINDS,v.kind)?v.kind:'other',place:String(v.place||'').slice(0,80),when:Number(v.when)||0,
-      transport:has(TRANSPORT,v.transport)?v.transport:'unknown',rsvps:rs};
+      transport:has(TRANSPORT,v.transport)?v.transport:'unknown',
+      description:String(v.description||'').slice(0,500),by:v.by?String(v.by):null,
+      rsvps:rs,rides};
   }).filter(e=>e.when);
   // the group = everyone who has answered at least one outing
   const names=new Set();
   state.events.forEach(e=>{for(const n in e.rsvps)names.add(n)});
   state.people=[...names].sort((a,b)=>a.localeCompare(b,'he')).map(n=>({id:n,name:n}));
   state.ready=true;
-  render();refreshSheet();
+  render();refreshSheet();maybeOpenDeepLink();
 }
 
 /* ---------- writes: one at a time ---------- */
@@ -76,6 +93,7 @@ let chain=Promise.resolve();
 function enqueue(fn){const p=chain.then(fn);chain=p.catch(()=>{});return p}
 function writeFail(e){
   const c=e&&e.code;
+  if(e&&e.userMsg){toast(e.userMsg);return}
   toast(c==='forbidden'?'אין הרשאה. בדקו את ההגדרות ב-Supabase'
     :c==='conflict'?'השם הזה כבר תפוס'
     :'לא נשמר. בדקו חיבור ונסו שוב');
@@ -91,18 +109,47 @@ const trFromLabel=t=>Object.keys(TRANSPORT).find(k=>TRANSPORT[k].t===t)||'unknow
 // Fallback when config.js is empty: everything stays on this device (for trying the UI in a browser)
 function makeLocal(){
   let data={events:{}};
-  try{const s=LS.get('yotz.local.v2');if(s)data=JSON.parse(s)}catch(e){}
+  try{const s=LS.get('yotz.local.v3');if(s)data=JSON.parse(s)}catch(e){}
   if(!data.events)data={events:{}};
   let onE;
-  const save=()=>LS.set('yotz.local.v2',JSON.stringify(data));
-  const emit=()=>{onE&&onE(data.events)};
+  const save=()=>LS.set('yotz.local.v3',JSON.stringify(data));
+  const emit=()=>{onE&&onE(JSON.parse(JSON.stringify(data.events)))};
+  const err=(msg,code)=>{const e=new Error(msg);e.code=code||'invalid';return e};
+  const ridesOf=id=>data.events[id]&&Array.isArray(data.events[id].rides)?data.events[id].rides:(data.events[id]?(data.events[id].rides=[]):null);
   return{
     subscribe(cb){onE=cb;emit()},
-    async addEvent(ev){data.events[rid('e')]=ev;save();emit()},
+    async addEvent(ev){data.events[rid('e')]={...ev,rides:[]};save();emit()},
+    async updateEvent(id,patch){const e=data.events[id];if(!e)throw err('not found');Object.assign(e,patch);save();emit()},
     async setRsvp(id,name,st){const e=data.events[id];if(e){e.rsvps[name]=st;save();emit()}},
     async deleteEvent(id){delete data.events[id];save();emit()},
     async renamePerson(from,to){
       for(const id in data.events){const r=data.events[id].rsvps;if(has(r,from)){r[to]=r[from];delete r[from]}}
+      save();emit();
+    },
+    async createRide(eventId,driver,seats,pickup,note){
+      const rs=ridesOf(eventId);if(!rs)throw err('not found');
+      if(rs.some(r=>r.driver===driver))throw err('כבר יש לך רכב ביציאה הזו','conflict');
+      rs.forEach(r=>{r.passengers=r.passengers.filter(p=>p!==driver)});
+      rs.push({id:rid('r'),driver,seats:Math.max(0,Math.min(20,Number(seats)||0)),pickup:pickup||'',note:note||'',passengers:[]});
+      save();emit();
+    },
+    async joinRide(eventId,rideId,name){
+      const rs=ridesOf(eventId);if(!rs)throw err('not found');
+      const ride=rs.find(r=>r.id===rideId);if(!ride)throw err('ride not found');
+      if(ride.driver===name)throw err('driver cannot join own ride');
+      if(ride.passengers.length>=ride.seats)throw err('אין יותר מקום ברכב הזה','conflict');
+      rs.forEach(r=>{r.passengers=r.passengers.filter(p=>p!==name)});
+      if(!ride.passengers.includes(name))ride.passengers.push(name);
+      save();emit();
+    },
+    async leaveRide(eventId,rideId,name){
+      const rs=ridesOf(eventId);if(!rs)return;
+      const ride=rs.find(r=>r.id===rideId);if(ride)ride.passengers=ride.passengers.filter(p=>p!==name);
+      save();emit();
+    },
+    async deleteRide(eventId,rideId,driver){
+      const rs=ridesOf(eventId);if(!rs)return;
+      const i=rs.findIndex(r=>r.id===rideId&&r.driver===driver);if(i>=0)rs.splice(i,1);
       save();emit();
     }
   };
@@ -128,15 +175,17 @@ function makeSupabase(url,key){
   async function pull(){
     if(pending)return;
     const since=new Date(Date.now()-60*864e5);
-    const rows=await api('GET','events?select=*,participants(name,status)&date=gte.'+iso(since)+'&order=date.asc,time.asc');
+    const rows=await api('GET','events?select=*,participants(name,status),rides(id,driver_name,available_seats,pickup_location,note,ride_passengers(passenger_name))&date=gte.'+iso(since)+'&order=date.asc,time.asc');
     if(pending)return;
     const events={};
     rows.forEach(e=>{
       const [y,m,d]=String(e.date).split('-').map(Number),[hh,mm]=String(e.time).split(':').map(Number);
       const rs=Object.create(null);
       (e.participants||[]).forEach(p=>{if(has(STATUS_IN,p.status))rs[p.name]=STATUS_IN[p.status]});
+      const rides=(e.rides||[]).map(r=>({id:r.id,driver:r.driver_name,seats:r.available_seats,
+        pickup:r.pickup_location||'',note:r.note||'',passengers:(r.ride_passengers||[]).map(p=>p.passenger_name)}));
       events[e.id]={kind:kindFromLabel(e.type),place:e.title||e.location,when:new Date(y,m-1,d,hh,mm).getTime(),
-        transport:trFromLabel(e.transport),rsvps:rs};
+        transport:trFromLabel(e.transport),description:e.description||'',by:e.created_by||null,rsvps:rs,rides};
     });
     firstDone=true;
     const sig=JSON.stringify(events);
@@ -162,17 +211,39 @@ function makeSupabase(url,key){
     addEvent:ev=>write(null,async()=>{
       const d=new Date(ev.when);
       const rows=await api('POST','events',{title:ev.place,type:KINDS[ev.kind].t,location:ev.place,
-        date:iso(d),time:hhmm(d),transport:TRANSPORT[ev.transport].t},'return=representation');
+        date:iso(d),time:hhmm(d),transport:TRANSPORT[ev.transport].t,
+        description:ev.description||null,created_by:ev.by||null},'return=representation');
       const id=rows[0].id;
       await api('POST','participants?on_conflict=event_id,name',
         Object.keys(ev.rsvps).map(n=>({event_id:id,name:n,status:STATUS_OUT[ev.rsvps[n]]})),UP);
+    }),
+    updateEvent:(id,patch)=>write(()=>{if(cache[id])Object.assign(cache[id],patch)},()=>{
+      const body={};
+      if('place' in patch){body.title=patch.place;body.location=patch.place}
+      if('kind'  in patch)body.type=KINDS[patch.kind].t;
+      if('when'  in patch){const d=new Date(patch.when);body.date=iso(d);body.time=hhmm(d)}
+      if('transport' in patch)body.transport=TRANSPORT[patch.transport].t;
+      if('description' in patch)body.description=patch.description||null;
+      return api('PATCH','events?id=eq.'+encodeURIComponent(id),body,'return=minimal');
     }),
     setRsvp:(id,name,st)=>write(()=>{if(cache[id])cache[id].rsvps[name]=st},
       ()=>api('POST','participants?on_conflict=event_id,name',[{event_id:Number(id),name,status:STATUS_OUT[st]}],UP)),
     deleteEvent:id=>write(()=>{delete cache[id]},
       ()=>api('DELETE','events?id=eq.'+encodeURIComponent(id))),
     renamePerson:(from,to)=>write(null,
-      ()=>api('PATCH','participants?name=eq.'+encodeURIComponent(from),{name:to},'return=minimal'))
+      ()=>api('PATCH','participants?name=eq.'+encodeURIComponent(from),{name:to},'return=minimal')),
+    createRide:(eventId,driver,seats,pickup,note)=>write(null,async()=>{
+      try{await api('POST','rpc/create_ride',{p_event_id:Number(eventId),p_driver:driver,p_seats:seats,p_pickup:pickup||'',p_note:note||''})}
+      catch(e){if(e.code==='conflict')e.userMsg='כבר יש לך רכב ביציאה הזו';throw e}
+    }),
+    joinRide:(eventId,rideId,name)=>write(null,async()=>{
+      try{await api('POST','rpc/join_ride',{p_ride_id:Number(rideId),p_passenger:name})}
+      catch(e){e.userMsg='אין יותר מקום ברכב הזה, מישהו כבר תפס אותו';throw e}
+    }),
+    leaveRide:(eventId,rideId,name)=>write(null,
+      ()=>api('POST','rpc/leave_ride',{p_ride_id:Number(rideId),p_passenger:name})),
+    deleteRide:(eventId,rideId,driver)=>write(null,
+      ()=>api('DELETE','rides?id=eq.'+encodeURIComponent(rideId)+'&driver_name=eq.'+encodeURIComponent(driver)))
   };
 }
 async function makeStore(){
@@ -439,19 +510,93 @@ async function shareEvent(id){
   const plain=text.replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu,'').split('\n').map(l=>l.trim()).filter(Boolean).join('\n');
   window.open('https://api.whatsapp.com/send?text='+encodeURIComponent(plain),'_blank','noopener');
 }
+/* ---------- calendar + navigate ---------- */
+const CAL_END_AFTER=3*3600e3; // no end time is stored, so the calendar event defaults to 3 hours
+function calendarUrl(ev){
+  const start=new Date(ev.when),end=new Date(ev.when+CAL_END_AFTER);
+  const f=d=>d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+'T'+pad(d.getHours())+pad(d.getMinutes())+'00';
+  const back=(window.APP_CONFIG&&window.APP_CONFIG.SHARE_URL)||(IS_NATIVE?'':location.href.split('#')[0]);
+  const details=[ev.description,back?'פרטים ועדכון סטטוס: '+back+'?event='+encodeURIComponent(ev.id):null].filter(Boolean).join('\n\n');
+  const p=new URLSearchParams({action:'TEMPLATE',text:ev.place,dates:f(start)+'/'+f(end),details,location:ev.place,ctz:'Asia/Jerusalem'});
+  return 'https://calendar.google.com/calendar/render?'+p.toString();
+}
+const calBtn=ev=>`<a class="actbtn" href="${esc(calendarUrl(ev))}" target="_blank" rel="noopener">📅 הוסף ליומן</a>`;
+const navBtn=ev=>`<button class="actbtn" data-act="nav" data-id="${esc(ev.id)}">🗺️ נווט</button>`;
+function navHTML(ev){
+  const q=encodeURIComponent(ev.place);
+  const opts=[
+    {e:'🗺️',t:'Google Maps',href:'https://www.google.com/maps/search/?api=1&query='+q},
+    {e:'🚗',t:'Waze',href:'https://waze.com/ul?q='+q+'&navigate=yes'}
+  ];
+  if(IS_IOS)opts.push({e:'🍎',t:'Apple Maps',href:'https://maps.apple.com/?q='+q});
+  const rows=opts.map(o=>`<a class="navrow" href="${esc(o.href)}" target="_blank" rel="noopener" data-act="close">
+    <span class="nave">${o.e}</span><span>${o.t}</span></a>`).join('');
+  return `<div class="grab"></div><div class="dhead"><h2 class="dt">נווט באמצעות</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
+    <div class="pad">${rows}</div>`;
+}
+function openNav(id){
+  const ev=state.events.find(e=>e.id===id);if(!ev)return;
+  openSheet(navHTML(ev));view={type:'nav'};
+}
+
+/* ---------- rides ---------- */
+function ridesHTML(ev){
+  const myRide=ev.rides.find(r=>r.passengers.includes(myId()));
+  const myCar =ev.rides.find(r=>r.driver===myId());
+  let h='<div class="grp rides"><div class="gh">🚗 רכבים</div>';
+  if(myRide){
+    h+=`<div class="mystatus">🚗 אתה נוסע עם <b>${esc(myRide.driver)}</b>
+      <button class="link-btn" data-act="leave-ride" data-rid="${esc(myRide.id)}">עזוב את הרכב</button></div>`;
+  }
+  if(!ev.rides.length){
+    h+='<p class="dash" style="margin:2px 0 0">עדיין אין רכבים. תהיו הראשונים.</p>';
+  }else{
+    ev.rides.forEach(r=>{
+      const free=r.seats-r.passengers.length;
+      const isMine=r.driver===myId();
+      const passHTML=r.passengers.length
+        ?r.passengers.map(p=>`<span class="pill yes">${esc(p)}${isMine?`<button class="pillx" data-act="kick" data-rid="${esc(r.id)}" data-name="${esc(p)}" aria-label="הסר את ${esc(p)}">✕</button>`:''}</span>`).join('')
+        :'<span class="dash">אין נוסעים עדיין</span>';
+      let btn;
+      if(isMine)btn=`<button class="del" data-act="del-ride" data-rid="${esc(r.id)}">🗑️ מחק את הרכב</button>`;
+      else if(myRide&&myRide.id===r.id)btn='';
+      else if(free<=0)btn='<button class="ridebtn" disabled>אין מקומות פנויים</button>';
+      else btn=`<button class="ridebtn" data-act="join-ride" data-rid="${esc(r.id)}">${myRide?'עבור לרכב הזה':'הצטרף לרכב'}</button>`;
+      h+=`<div class="ride">
+        <div class="rhead"><span class="rdrv">🚗 ${esc(r.driver)}${isMine?' <span class="you">(אתה)</span>':''}</span>
+          <span class="rseats">${free>0?free+' מקומות פנוי'+(free===1?'':'ים'):'מלא'}</span></div>
+        ${r.pickup?`<div class="rmeta">📍 ${esc(r.pickup)}</div>`:''}${r.note?`<div class="rmeta">${esc(r.note)}</div>`:''}
+        <div class="pills" style="margin-top:8px">${passHTML}</div>
+        ${btn}
+      </div>`;
+    });
+  }
+  const noCar=state.people.filter(p=>ev.rsvps[p.id]==='yes'&&!ev.rides.some(r=>r.driver===p.id||r.passengers.includes(p.id)));
+  if(noCar.length)h+=`<div class="nocar"><span class="gh" style="margin-bottom:6px">🚶 ללא רכב</span><div class="pills">${noCar.map(p=>`<span class="pill none">${esc(p.name)}</span>`).join('')}</div></div>`;
+  if(!myCar)h+=`<button class="ridebtn add" data-act="ride-form" data-id="${esc(ev.id)}">🚗 אני מוציא רכב</button>`;
+  h+='</div>';
+  return h;
+}
+
 const delBtn=ev=>`<button class="del" data-act="del" data-id="${esc(ev.id)}">🗑️ מחק יציאה</button>`;
 function detailHTML(ev){
   const k=KINDS[ev.kind],g=groups(ev),my=ev.rsvps[myId()],d=new Date(ev.when);
   const isPast=ev.when+PAST_AFTER<Date.now();
   const sub=(isPast?ddmm(d)+' · '+hhmm(d):whenLabel(ev.when))+(trText(ev)?' · '+trText(ev):'');
+  const canEdit=!isPast&&me&&(!ev.by||ev.by===me.id);
   let h=`<div class="grab"></div><div class="dhead" style="--h:${k.h}"><span class="tile">${k.e}</span>
     <div class="ctxt"><h2 class="dt">${esc(ev.place)}</h2><div class="cwhen">${sub}</div></div>
     <button class="x" data-act="close" aria-label="סגור">✕</button></div>`;
+  if(!isPast)h+=`<div class="actrow">${navBtn(ev)}${calBtn(ev)}</div>`;
+  if(ev.description)h+=`<p class="descr">${esc(ev.description)}</p>`;
   if(isPast){
     h+=grp('yes','🟢','הגיעו',g.yes)+delBtn(ev)+'<div class="pad"></div>';
   }else{
     h+=shareBtn(ev)+grp('yes','🟢','מגיעים',g.yes)+grp('maybe','🟡','אולי',g.maybe)
-      +grp('none','⚪','עדיין לא ענו',g.none)+grp('no','🔴','לא מגיעים',g.no)+delBtn(ev)
+      +grp('none','⚪','עדיין לא ענו',g.none)+grp('no','🔴','לא מגיעים',g.no)
+      +ridesHTML(ev)
+      +(canEdit?`<button class="edit" data-act="edit" data-id="${esc(ev.id)}">✏️ ערוך יציאה</button>`:'')
+      +delBtn(ev)
       +`<div class="rsvpbar">${btns(ev,my,'sb','לא מגיע')}</div>`;
   }
   return h;
@@ -468,20 +613,28 @@ function refreshSheet(){
   sh.innerHTML=detailHTML(ev);sh.scrollTop=st;
 }
 
-/* ---------- create form ---------- */
+/* ---------- create / edit form (same sheet, two modes) ---------- */
 let form=null;
-function openForm(){
+function dayModeOf(when){
+  const diff=Math.round((sod(new Date(when))-sod(new Date()))/864e5);
+  return diff===0?'today':diff===1?'tomorrow':'custom';
+}
+function openForm(editEv){
   if(!state.ready||!me){toast('רגע, הלוח נטען');return}
-  const d=new Date(Math.ceil((Date.now()+10*60e3)/(30*60e3))*(30*60e3));
-  form={kind:null,transport:has(TRANSPORT,LS.get('yotz.tr'))?LS.get('yotz.tr'):'unknown',dm:d.getDate()===new Date().getDate()?'today':'tomorrow'};
+  const editing=!!editEv;
+  const d=editing?new Date(editEv.when):new Date(Math.ceil((Date.now()+10*60e3)/(30*60e3))*(30*60e3));
+  form={editId:editing?editEv.id:null,
+    kind:editing?editEv.kind:null,
+    transport:editing?editEv.transport:(has(TRANSPORT,LS.get('yotz.tr'))?LS.get('yotz.tr'):'unknown'),
+    dm:editing?dayModeOf(editEv.when):(d.getDate()===new Date().getDate()?'today':'tomorrow')};
   const kinds=Object.entries(KINDS).map(([k,v])=>`<button class="opt" data-act="kind" data-v="${k}"><span class="e">${v.e}</span>${v.t}</button>`).join('');
   const trs=Object.entries(TRANSPORT).map(([k,v])=>`<button class="ch" data-act="tr" data-v="${k}">${v.e} ${v.t}</button>`).join('');
   openSheet(`<div class="grab"></div>
-    <div class="dhead"><h2 class="dt">יציאה חדשה</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
+    <div class="dhead"><h2 class="dt">${editing?'עריכת יציאה':'יציאה חדשה'}</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
     <div>
       <div class="fl">מה עושים?</div><div class="kinds">${kinds}</div>
       <div class="fl">איפה?</div>
-      <input class="txt" id="f-place" maxlength="60" placeholder="לאגר הוד השרון (לא חובה)" autocomplete="off" enterkeyhint="done">
+      <input class="txt" id="f-place" maxlength="60" placeholder="לאגר הוד השרון (לא חובה)" autocomplete="off" enterkeyhint="done" value="${editing?esc(editEv.place):''}">
       <div class="fl">מתי?</div>
       <div class="row">
         <button class="ch" data-act="dm" data-v="today">היום</button>
@@ -491,11 +644,17 @@ function openForm(){
       <div class="row" style="margin-top:10px">${['20:00','21:00','22:00'].map(t=>`<button class="ch" data-act="tm" data-v="${t}">${t}</button>`).join('')}</div>
       <div class="dtrow"><input class="txt" type="date" id="f-date" hidden><input class="txt" type="time" id="f-time"></div>
       <div class="fl">איך מגיעים?</div><div class="row">${trs}</div>
-      <div class="formbar"><button class="submit" id="f-submit" data-act="submit" disabled>צור יציאה</button></div>
+      <div class="fl">תיאור (לא חובה)</div>
+      <textarea class="txt area" id="f-descr" maxlength="500" placeholder="נפגשים ב-21:30 אצל דניאל, משם ממשיכים לבר…">${editing?esc(editEv.description||''):''}</textarea>
+      <div class="formbar">
+        ${editing?'<button class="cancel" data-act="close">ביטול</button>':''}
+        <button class="submit" id="f-submit" data-act="submit" disabled>${editing?'שמור':'צור יציאה'}</button>
+      </div>
     </div>`);
   view={type:'form'};
   $('#f-time').value=hhmm(d);
   $('#f-date').min=iso(new Date());
+  if(editing&&form.dm==='custom')$('#f-date').value=iso(d);
   syncForm();
 }
 function syncForm(){
@@ -522,10 +681,79 @@ function submitForm(){
   base.setHours(t[0],t[1],0,0);
   const when=base.getTime();
   if(when<Date.now()-30*60e3){toast('השעה הזו כבר עברה');return}
-  const ev={kind:form.kind,place,when,transport:form.transport,rsvps:{[me.id]:'yes'}};
+  const description=$('#f-descr').value.trim();
   LS.set('yotz.tr',form.transport);
+  if(form.editId){
+    const id=form.editId;
+    closeSheet();
+    enqueue(()=>store.updateEvent(id,{kind:form.kind,place,when,transport:form.transport,description}))
+      .then(()=>toast('היציאה עודכנה')).catch(writeFail);
+  }else{
+    const ev={kind:form.kind,place,when,transport:form.transport,description,by:me.id,rsvps:{[me.id]:'yes'}};
+    closeSheet();
+    enqueue(()=>store.addEvent(ev)).then(()=>toast('היציאה נוצרה 🎉')).catch(writeFail);
+  }
+}
+function openEditForm(id){
+  const ev=state.events.find(e=>e.id===id);if(!ev)return;
+  openForm(ev);
+}
+
+/* ---------- ride form ---------- */
+let rform=null;
+function openRideForm(eventId){
+  if(!me)return;
+  rform={eventId,seats:3,pickup:'',note:''};
+  openSheet(`<div class="grab"></div>
+    <div class="dhead"><h2 class="dt">אני מוציא רכב</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
+    <div>
+      <div class="fl">כמה מקומות פנויים? (בלי הנהג)</div>
+      <div class="stepper">
+        <button class="stbtn" data-act="seat-dec" aria-label="פחות מקומות">－</button>
+        <span class="stval" id="r-seats">3</span>
+        <button class="stbtn" data-act="seat-inc" aria-label="עוד מקומות">＋</button>
+      </div>
+      <div class="fl">מאיפה יוצאים? (לא חובה)</div>
+      <input class="txt" id="r-pickup" maxlength="60" placeholder="לדוגמה: מהקניון" autocomplete="off" enterkeyhint="done">
+      <div class="fl">הערה לנהג (לא חובה)</div>
+      <input class="txt" id="r-note" maxlength="80" placeholder="לדוגמה: יוצא ב-21:00 בדיוק" autocomplete="off" enterkeyhint="done">
+      <div class="formbar"><button class="submit" data-act="ride-submit">🚗 הוסף רכב</button></div>
+    </div>`);
+  view={type:'ride-form'};
+}
+function stepSeats(d){
+  if(!rform)return;
+  rform.seats=Math.max(1,Math.min(8,rform.seats+d));
+  const el=$('#r-seats');if(el)el.textContent=rform.seats;
+}
+function submitRide(){
+  if(!rform||!me)return;
+  const pickup=$('#r-pickup').value.trim(),note=$('#r-note').value.trim();
+  const eventId=rform.eventId,seats=rform.seats;
   closeSheet();
-  enqueue(()=>store.addEvent(ev)).then(()=>toast('היציאה נוצרה 🎉')).catch(writeFail);
+  enqueue(()=>store.createRide(eventId,me.id,seats,pickup,note))
+    .then(()=>toast('הרכב נוסף 🚗')).catch(writeFail);
+  ensureGoing(eventId);   // driving means you're attending
+}
+function joinRide(eventId,rideId){
+  if(!me)return;
+  enqueue(()=>store.joinRide(eventId,rideId,me.id)).then(()=>toast('הצטרפת לרכב')).catch(writeFail);
+  ensureGoing(eventId);   // needing a ride means you're attending
+}
+function ensureGoing(eventId){
+  const ev=state.events.find(e=>e.id===eventId);
+  if(ev&&me&&ev.rsvps[me.id]!=='yes')enqueue(()=>store.setRsvp(eventId,me.id,'yes')).catch(()=>{});
+}
+function leaveRide(eventId,rideId){
+  if(!me)return;
+  enqueue(()=>store.leaveRide(eventId,rideId,me.id)).catch(writeFail);
+}
+function kickPassenger(eventId,rideId,name){
+  enqueue(()=>store.leaveRide(eventId,rideId,name)).then(()=>toast(name+' הוסר מהרכב')).catch(writeFail);
+}
+function deleteRide(eventId,rideId){
+  if(!me)return;
+  enqueue(()=>store.deleteRide(eventId,rideId,me.id)).then(()=>toast('הרכב נמחק')).catch(writeFail);
 }
 
 /* ---------- rename / delete ---------- */
@@ -583,17 +811,27 @@ function submitGate(){
   const nm=name.slice(0,20);me={id:nm,name:nm};
   LS.set('yotz.me',JSON.stringify(me));
   $('#gate').remove();
-  render();
+  render();maybeOpenDeepLink();
 }
 
 /* ---------- events ---------- */
 document.addEventListener('click',e=>{
   const el=e.target.closest('[data-act]');if(!el)return;
-  const a=el.dataset.act,id=el.dataset.id;
+  const a=el.dataset.act,id=el.dataset.id,rid_=el.dataset.rid,name_=el.dataset.name;
   if(a==='rsvp')setRsvp(id,el.dataset.s);
   else if(a==='open')openDetail(id);
   else if(a==='close')closeSheet();
   else if(a==='new')openForm();
+  else if(a==='edit')openEditForm(id);
+  else if(a==='nav')openNav(id);
+  else if(a==='ride-form')openRideForm(id);
+  else if(a==='seat-dec'){e.preventDefault();stepSeats(-1)}
+  else if(a==='seat-inc'){e.preventDefault();stepSeats(1)}
+  else if(a==='ride-submit')submitRide();
+  else if(a==='join-ride'){if(view&&view.type==='detail')joinRide(view.id,rid_)}
+  else if(a==='leave-ride'){if(view&&view.type==='detail')leaveRide(view.id,rid_)}
+  else if(a==='kick'){if(view&&view.type==='detail')kickPassenger(view.id,rid_,name_)}
+  else if(a==='del-ride'){if(view&&view.type==='detail')deleteRide(view.id,rid_)}
   else if(a==='kind'){form.kind=el.dataset.v;syncForm()}
   else if(a==='dm'){
     form.dm=el.dataset.v;
