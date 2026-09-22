@@ -42,8 +42,38 @@ function whenLabel(ts){
 let toastTimer;
 function toast(msg){
   const t=$('#toast');t.textContent=msg;t.hidden=false;
+  t.classList.remove('in');void t.offsetWidth;t.classList.add('in');
   clearTimeout(toastTimer);toastTimer=setTimeout(()=>{t.hidden=true},2600);
 }
+
+/* ---------- ride rules (same rules as the database, see supabase-migration-v4.sql) ----------
+   In one outing a person is exactly one of: driver / passenger in one car / no car.
+   Only someone marked "going" can be in a car. */
+function rideRole(ev,name){
+  if(!ev||!name)return null;
+  const own=ev.rides.find(r=>r.driver===name);
+  if(own)return{type:'driver',ride:own};
+  const seat=ev.rides.find(r=>r.passengers.includes(name));
+  if(seat)return{type:'passenger',ride:seat};
+  return null;
+}
+// Mutates an event object (from either store) after `name` changed their RSVP to `st`
+function applyRsvpToRides(rides,name,st){
+  if(st==='yes'||!Array.isArray(rides))return rides;
+  const out=rides.filter(r=>r.driver!==name);                    // a driver who isn't coming: the car is gone
+  out.forEach(r=>{r.passengers=r.passengers.filter(p=>p!==name)}); // a passenger who isn't coming: out of the car
+  return out;
+}
+const RIDE_ERR={
+  YZ_ALREADY_PASSENGER:'אתה כבר נוסע ברכב של מישהו אחר',
+  YZ_ALREADY_DRIVER:'אתה מוציא רכב ביציאה הזו',
+  YZ_OWN_RIDE:'זה הרכב שלך',
+  YZ_RIDE_FULL:'אין יותר מקום ברכב הזה',
+  YZ_RIDE_NOT_FOUND:'הרכב הזה כבר לא קיים',
+  YZ_NOT_GOING:'רק מי שמגיע יכול להיות ברכב',
+  YZ_ALREADY_IN_RIDE:'אתה כבר משובץ ברכב אחר',
+  YZ_SEATS_TAKEN:'יש ברכב יותר נוסעים ממספר המקומות'
+};
 
 /* ---------- identity: just a name, kept in localStorage ---------- */
 let me=null;
@@ -56,15 +86,22 @@ let store=null;
 // a link from a calendar event (?event=123) opens that outing once the board has loaded and a name is set
 let pendingEventId=null;
 try{pendingEventId=new URLSearchParams(location.search).get('event')||null}catch(e){}
+function clearDeepLink(){
+  pendingEventId=null;
+  try{history.replaceState(null,'',location.pathname+location.hash)}catch(e){}
+}
 function maybeOpenDeepLink(){
   if(!pendingEventId||!me||sheetEl)return;
-  if(!state.events.some(e=>e.id===pendingEventId))return;
-  const id=pendingEventId;pendingEventId=null;
-  try{history.replaceState(null,'',location.pathname+location.hash)}catch(e){}
+  if(!state.events.some(e=>e.id===pendingEventId)){
+    // only give up after the server answered (the cached board may simply be older than the link)
+    if(state.fresh){clearDeepLink();toast('היציאה הזו כבר לא קיימת')}
+    return;
+  }
+  const id=pendingEventId;clearDeepLink();
   openDetail(id);
 }
 
-function setEvents(o){
+function setEvents(o,fresh){
   state.events=Object.entries(o).map(([id,v])=>{
     v=v||{};const rs=Object.create(null);
     if(v.rsvps&&typeof v.rsvps==='object'){
@@ -85,7 +122,8 @@ function setEvents(o){
   state.events.forEach(e=>{for(const n in e.rsvps)names.add(n)});
   state.people=[...names].sort((a,b)=>a.localeCompare(b,'he')).map(n=>({id:n,name:n}));
   state.ready=true;
-  render();refreshSheet();maybeOpenDeepLink();
+  if(fresh)state.fresh=true;
+  render();refreshSheet();paintInvite();maybeOpenDeepLink();
 }
 
 /* ---------- writes: one at a time ---------- */
@@ -93,6 +131,7 @@ let chain=Promise.resolve();
 function enqueue(fn){const p=chain.then(fn);chain=p.catch(()=>{});return p}
 function writeFail(e){
   const c=e&&e.code;
+  if(e&&e.msg&&RIDE_ERR[e.msg]){toast(RIDE_ERR[e.msg]);return}
   if(e&&e.userMsg){toast(e.userMsg);return}
   toast(c==='forbidden'?'אין הרשאה. בדקו את ההגדרות ב-Supabase'
     :c==='conflict'?'השם הזה כבר תפוס'
@@ -113,33 +152,51 @@ function makeLocal(){
   if(!data.events)data={events:{}};
   let onE;
   const save=()=>LS.set('yotz.local.v3',JSON.stringify(data));
-  const emit=()=>{onE&&onE(JSON.parse(JSON.stringify(data.events)))};
+  const emit=()=>{onE&&onE(JSON.parse(JSON.stringify(data.events)),true)};
   const err=(msg,code)=>{const e=new Error(msg);e.code=code||'invalid';return e};
   const ridesOf=id=>data.events[id]&&Array.isArray(data.events[id].rides)?data.events[id].rides:(data.events[id]?(data.events[id].rides=[]):null);
+  const rule=code=>{const e=err(code);e.msg=code;return e};
   return{
     subscribe(cb){onE=cb;emit()},
-    async addEvent(ev){data.events[rid('e')]={...ev,rides:[]};save();emit()},
+    async addEvent(ev){const id=rid('e');data.events[id]={...ev,rides:[]};save();emit();return id},
     async updateEvent(id,patch){const e=data.events[id];if(!e)throw err('not found');Object.assign(e,patch);save();emit()},
-    async setRsvp(id,name,st){const e=data.events[id];if(e){e.rsvps[name]=st;save();emit()}},
-    async deleteEvent(id){delete data.events[id];save();emit()},
-    async renamePerson(from,to){
-      for(const id in data.events){const r=data.events[id].rsvps;if(has(r,from)){r[to]=r[from];delete r[from]}}
+    async setRsvp(id,name,st){
+      const e=data.events[id];if(!e)return;
+      e.rsvps[name]=st;e.rides=applyRsvpToRides(ridesOf(id),name,st);
       save();emit();
     },
-    async createRide(eventId,driver,seats,pickup,note){
+    async deleteEvent(id){delete data.events[id];save();emit()},
+    async renamePerson(from,to){
+      for(const id in data.events){
+        const ev=data.events[id],r=ev.rsvps;if(has(r,from)){r[to]=r[from];delete r[from]}
+        (ev.rides||[]).forEach(x=>{if(x.driver===from)x.driver=to;x.passengers=x.passengers.map(p=>p===from?to:p)});
+      }
+      save();emit();
+    },
+    async createRide(eventId,driver,seats,pickup,note,sw){
       const rs=ridesOf(eventId);if(!rs)throw err('not found');
       if(rs.some(r=>r.driver===driver))throw err('כבר יש לך רכב ביציאה הזו','conflict');
-      rs.forEach(r=>{r.passengers=r.passengers.filter(p=>p!==driver)});
+      if(rs.some(r=>r.passengers.includes(driver))){
+        if(!sw)throw rule('YZ_ALREADY_PASSENGER');
+        rs.forEach(r=>{r.passengers=r.passengers.filter(p=>p!==driver)});
+      }
+      data.events[eventId].rsvps[driver]='yes';   // driving means you're coming
       rs.push({id:rid('r'),driver,seats:Math.max(0,Math.min(20,Number(seats)||0)),pickup:pickup||'',note:note||'',passengers:[]});
       save();emit();
     },
-    async joinRide(eventId,rideId,name){
-      const rs=ridesOf(eventId);if(!rs)throw err('not found');
-      const ride=rs.find(r=>r.id===rideId);if(!ride)throw err('ride not found');
-      if(ride.driver===name)throw err('driver cannot join own ride');
-      if(ride.passengers.length>=ride.seats)throw err('אין יותר מקום ברכב הזה','conflict');
+    async joinRide(eventId,rideId,name,sw){
+      let rs=ridesOf(eventId);if(!rs)throw err('not found');
+      const ride=rs.find(r=>r.id===rideId);if(!ride)throw rule('YZ_RIDE_NOT_FOUND');
+      if(ride.driver===name)throw rule('YZ_OWN_RIDE');
+      if(ride.passengers.includes(name))return;
+      if(ride.passengers.length>=ride.seats)throw rule('YZ_RIDE_FULL');
+      if(rs.some(r=>r.driver===name)){
+        if(!sw)throw rule('YZ_ALREADY_DRIVER');
+        rs=data.events[eventId].rides=rs.filter(r=>r.driver!==name);   // their own car (and its passengers' seats) is gone
+      }
+      data.events[eventId].rsvps[name]='yes';     // needing a ride means you're coming
       rs.forEach(r=>{r.passengers=r.passengers.filter(p=>p!==name)});
-      if(!ride.passengers.includes(name))ride.passengers.push(name);
+      ride.passengers.push(name);
       save();emit();
     },
     async leaveRide(eventId,rideId,name){
@@ -166,12 +223,15 @@ function makeSupabase(url,key){
     if(!r.ok){
       const e=new Error('http '+r.status);
       e.code=(r.status===401||r.status===403)?'forbidden':r.status===409?'conflict':'unavailable';
+      // rule violations raised by the database (YZ_…) come back as the error message
+      try{const j=await r.json();if(j&&j.message){e.msg=String(j.message);if(RIDE_ERR[e.msg])e.code='rule'}}catch(_){}
       throw e;
     }
     return(method==='GET'||(prefer&&prefer.indexOf('representation')>=0))?r.json():null;
   }
   let cache={},onE,pending=0,lastSig=null,firstDone=false;
-  const emit=()=>onE(cache);
+  const emit=()=>onE(cache,firstDone);
+  const findRide=(eventId,rideId)=>{const e=cache[eventId];return e?e.rides.find(r=>String(r.id)===String(rideId)):null};
   async function pull(){
     if(pending)return;
     const since=new Date(Date.now()-60*864e5);
@@ -193,10 +253,11 @@ function makeSupabase(url,key){
     lastSig=sig;cache=events;LS.set('yotz.cache.v1',sig);emit();
   }
   async function write(opt,fn){
-    pending++;
-    try{if(opt){opt();lastSig=null;emit()}await fn()}
+    pending++;let out;
+    try{if(opt){opt();lastSig=null;emit()}out=await fn()}
     catch(e){pending--;pull().catch(()=>{});throw e}
     pending--;await pull().catch(()=>{});
+    return out;
   }
   return{
     subscribe(cb,onErr){
@@ -216,6 +277,7 @@ function makeSupabase(url,key){
       const id=rows[0].id;
       await api('POST','participants?on_conflict=event_id,name',
         Object.keys(ev.rsvps).map(n=>({event_id:id,name:n,status:STATUS_OUT[ev.rsvps[n]]})),UP);
+      return String(id);
     }),
     updateEvent:(id,patch)=>write(()=>{if(cache[id])Object.assign(cache[id],patch)},()=>{
       const body={};
@@ -226,23 +288,31 @@ function makeSupabase(url,key){
       if('description' in patch)body.description=patch.description||null;
       return api('PATCH','events?id=eq.'+encodeURIComponent(id),body,'return=minimal');
     }),
-    setRsvp:(id,name,st)=>write(()=>{if(cache[id])cache[id].rsvps[name]=st},
+    // Not "going" anymore → the database trigger takes them out of any car (and removes their own car).
+    // The same thing is applied to the screen right away so it never shows a seat that no longer exists.
+    setRsvp:(id,name,st)=>write(()=>{if(cache[id]){cache[id].rsvps[name]=st;cache[id].rides=applyRsvpToRides(cache[id].rides,name,st)}},
       ()=>api('POST','participants?on_conflict=event_id,name',[{event_id:Number(id),name,status:STATUS_OUT[st]}],UP)),
     deleteEvent:id=>write(()=>{delete cache[id]},
       ()=>api('DELETE','events?id=eq.'+encodeURIComponent(id))),
     renamePerson:(from,to)=>write(null,
       ()=>api('PATCH','participants?name=eq.'+encodeURIComponent(from),{name:to},'return=minimal')),
-    createRide:(eventId,driver,seats,pickup,note)=>write(null,async()=>{
-      try{await api('POST','rpc/create_ride',{p_event_id:Number(eventId),p_driver:driver,p_seats:seats,p_pickup:pickup||'',p_note:note||''})}
+    // sw=true: "switch" (leave the car I'm in and drive / drop my car and ride with someone). Atomic in the database.
+    createRide:(eventId,driver,seats,pickup,note,sw)=>write(null,async()=>{
+      try{await api('POST','rpc/create_ride',{p_event_id:Number(eventId),p_driver:driver,p_seats:seats,p_pickup:pickup||'',p_note:note||'',p_switch:!!sw})}
       catch(e){if(e.code==='conflict')e.userMsg='כבר יש לך רכב ביציאה הזו';throw e}
     }),
-    joinRide:(eventId,rideId,name)=>write(null,async()=>{
-      try{await api('POST','rpc/join_ride',{p_ride_id:Number(rideId),p_passenger:name})}
-      catch(e){e.userMsg='אין יותר מקום ברכב הזה, מישהו כבר תפס אותו';throw e}
+    joinRide:(eventId,rideId,name,sw)=>write(()=>{
+      const ev=cache[eventId],ride=findRide(eventId,rideId);if(!ev||!ride)return;
+      if(sw)ev.rides=ev.rides.filter(r=>r.driver!==name);
+      ev.rides.forEach(r=>{r.passengers=r.passengers.filter(p=>p!==name)});
+      ride.passengers.push(name);ev.rsvps[name]='yes';
+    },async()=>{
+      try{await api('POST','rpc/join_ride',{p_ride_id:Number(rideId),p_passenger:name,p_switch:!!sw})}
+      catch(e){if(!e.msg||!RIDE_ERR[e.msg])e.userMsg='לא הצלחנו להצטרף לרכב. נסו שוב';throw e}
     }),
-    leaveRide:(eventId,rideId,name)=>write(null,
+    leaveRide:(eventId,rideId,name)=>write(()=>{const r=findRide(eventId,rideId);if(r)r.passengers=r.passengers.filter(p=>p!==name)},
       ()=>api('POST','rpc/leave_ride',{p_ride_id:Number(rideId),p_passenger:name})),
-    deleteRide:(eventId,rideId,driver)=>write(null,
+    deleteRide:(eventId,rideId,driver)=>write(()=>{const e=cache[eventId];if(e)e.rides=e.rides.filter(r=>String(r.id)!==String(rideId))},
       ()=>api('DELETE','rides?id=eq.'+encodeURIComponent(rideId)+'&driver_name=eq.'+encodeURIComponent(driver)))
   };
 }
@@ -404,7 +474,7 @@ const cn=g=>
   (g.no.length?`<span class="cnt">🔴 ${g.no.length} לא</span>`:'');
 const trText=ev=>ev.transport==='unknown'?'':TRANSPORT[ev.transport].e+' '+TRANSPORT[ev.transport].t;
 const btns=(ev,my,cls,noLabel)=>[['yes','🟢 אני מגיע'],['maybe','🟡 אולי'],['no','🔴 '+noLabel]]
-  .map(([s,l])=>`<button class="${cls}${my===s?' on':''}" data-act="rsvp" data-id="${esc(ev.id)}" data-s="${s}" aria-pressed="${my===s}">${l}</button>`).join('');
+  .map(([s,l])=>`<button class="${cls}${my===s?' on':''}${my===s&&tapped===ev.id+'|'+s?' pop':''}" data-act="rsvp" data-id="${esc(ev.id)}" data-s="${s}" aria-pressed="${my===s}">${l}</button>`).join('');
 
 function hero(ev){
   const k=KINDS[ev.kind],g=groups(ev),my=ev.rsvps[myId()];
@@ -413,7 +483,7 @@ function hero(ev){
     :'<span class="none-yet">עוד אף אחד לא אישר. תהיו הראשונים.</span>';
   return `<section class="hero" style="--h:${k.h}">
     <div class="info" data-act="open" data-id="${esc(ev.id)}" role="button" tabindex="0">
-      <div class="hrow"><span class="emo">${k.e}</span>${trText(ev)?`<span class="tr">${trText(ev)}</span>`:''}</div>
+      <div class="hrow"><span class="emo">${k.e}</span><span class="hrt">${trText(ev)?`<span class="tr">${trText(ev)}</span>`:''}<button class="hshare" data-act="share" data-id="${esc(ev.id)}" aria-label="שתפו את היציאה">${SHARE_ICON}<span>שתפו</span></button></span></div>
       <div class="place">${esc(ev.place)}</div>
       <div class="when">${whenLabel(ev.when)}</div>
       <div class="cnts">${cn(g)}</div>
@@ -491,32 +561,107 @@ function grp(cls,emoji,label,list){
     :'<span class="dash">—</span>';
   return `<div class="grp"><div class="gh">${emoji} ${label} <span class="n">${list.length}</span></div><div class="pills">${pills}</div></div>`;
 }
-const shareBtn=ev=>`<button class="wa" data-act="share" data-id="${esc(ev.id)}">💬 שתפו את היציאה</button>`;
+/* ---------- share: the main way new people get in ---------- */
+const SHARE_ICON='<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 14V3"/><path d="M7.5 7.5L12 3l4.5 4.5"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>';
+const shareBtn=ev=>`<button class="sharebtn" data-act="share" data-id="${esc(ev.id)}">${SHARE_ICON}<span>שתפו את היציאה</span></button>`;
+
+// Base address of the site (config SHARE_URL wins, so links from the app/localhost still point at the real site)
+function siteUrl(){
+  const c=window.APP_CONFIG&&window.APP_CONFIG.SHARE_URL;
+  if(c)return c;
+  if(IS_NATIVE||!/^https?:$/.test(location.protocol))return '';
+  return location.origin+location.pathname;
+}
+// Direct link to one outing: opens the site straight on it
+function eventUrl(id){
+  const base=siteUrl();if(!base)return '';
+  try{const u=new URL(base,location.href);u.search='';u.hash='';u.searchParams.set('event',id);return u.toString()}
+  catch(e){return base+(base.indexOf('?')>=0?'&':'?')+'event='+encodeURIComponent(id)}
+}
+
+const SHARE_WHAT={
+  bar:'יוצאים לבר',beach:'יורדים לחוף',party:'יוצאים למסיבה',food:'יוצאים לאכול',movie:'הולכים לסרט',
+  billiard:'יוצאים לביליארד',trip:'יוצאים לטיול',home:'נפגשים',gaming:'עושים ערב גיימינג',other:'יוצאים'
+};
+const CLOCKS=['🕛','🕐','🕑','🕒','🕓','🕔','🕕','🕖','🕗','🕘','🕙','🕚'];
+const CTAS=['מי מצטרף? 👀','מי בא? 🙌','מי איתנו? 😎','נו, מי בא? 🔥'];
+function listNames(ns){return ns.length<2?ns.join(''):ns.slice(0,-1).join(', ')+' ו'+ns[ns.length-1]}
+function hashOf(s){let h=0;for(const c of String(s))h=(h*31+c.charCodeAt(0))|0;return Math.abs(h)}
+
+// A short, friendly message built from the outing's real details (never claims people who aren't there)
 function shareText(ev){
-  const k=KINDS[ev.kind],d=new Date(ev.when);
-  const link=(window.APP_CONFIG&&window.APP_CONFIG.SHARE_URL)||(IS_NATIVE?'':location.href.split('#')[0]);
-  return [k.e+' '+ev.place,'📅 יום '+DAYS[d.getDay()]+' '+ddmm(d)+' · '+hhmm(d),trText(ev)||null,'מי מגיע? סמנו כאן 👇',link]
-    .filter(Boolean).join('\n');
+  const k=KINDS[ev.kind],d=new Date(ev.when),g=groups(ev);
+  const diff=Math.round((sod(d)-sod(new Date()))/864e5),evening=d.getHours()>=17||d.getHours()<4;
+  const whenWord=diff===0?(evening?'הערב':'היום'):diff===1?(evening?'מחר בערב':'מחר'):(diff>1&&diff<7)?'ב'+DAYS[d.getDay()]:'ב-'+ddmm(d);
+  const lines=[`${k.e} ${whenWord} ${SHARE_WHAT[ev.kind]}!`];
+  if(ev.place&&ev.place!==k.t)lines.push('📍 '+ev.place);
+  lines.push(`📅 יום ${DAYS[d.getDay()]} ${ddmm(d)} | ${CLOCKS[d.getHours()%12]} ${hhmm(d)}`);
+  const desc=(ev.description||'').split('\n')[0].trim();
+  if(desc&&desc.length<=90)lines.push('💬 '+desc);
+
+  // social proof: real names/numbers only
+  const going=g.yes.map(p=>p.name),n=going.length,meGoing=!!(me&&ev.rsvps[me.id]==='yes');
+  let social='';
+  if(n>=4)social=`👥 כבר ${n} מגיעים 🔥`;
+  else if(n>=2)social=`👥 ${listNames(going)} כבר מגיעים`;
+  else if(n===1)social=meGoing?'🙋 אני כבר בפנים':`👥 ${going[0]} כבר בפנים`;
+  const free=ev.rides.reduce((s,r)=>s+Math.max(0,r.seats-r.passengers.length),0);
+  const extra=[social,free>0?(free===1?'🚗 נשאר מקום אחד ברכב':`🚗 יש עוד ${free} מקומות ברכב`):''].filter(Boolean);
+
+  const link=eventUrl(ev.id);
+  const out=[lines.join('\n')];
+  if(extra.length)out.push(extra.join('\n'));
+  out.push(CTAS[hashOf(ev.id)%CTAS.length]+(link?'\n'+link:''));
+  if(link)out.push('נכנסים ומסמנים אם באים 🚀');
+  return out.join('\n\n');
 }
 async function shareEvent(id){
   const ev=state.events.find(e=>e.id===id);if(!ev)return;
-  const text=shareText(ev);
-  // The phone's own share sheet hands the text over as-is (emojis intact); pick WhatsApp there.
-  if(navigator.share){
-    try{await navigator.share({text});return}
+  // Phone: its own share sheet (WhatsApp, Messages, Telegram…) gets the text as-is, emojis intact.
+  if(navigator.share&&IS_MOBILE){
+    try{await navigator.share({text:shareText(ev)});return}
     catch(e){if(e&&e.name==='AbortError')return}
   }
-  // No share sheet (e.g. desktop): WhatsApp links corrupt emojis, so send the same text without them.
-  const plain=text.replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu,'').split('\n').map(l=>l.trim()).filter(Boolean).join('\n');
+  openShareSheet(ev,false);
+}
+// Fallback (desktop / no share sheet), and the "your outing is live" moment right after creating one
+function shareSheetHTML(ev,justCreated){
+  const k=KINDS[ev.kind];
+  const head=`<div class="grab"></div><div class="dhead"><h2 class="dt">${justCreated?'היציאה באוויר 🎉':'שיתוף היציאה'}</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>`
+    +(justCreated?'<p class="shsub">שלחו לחבורה. מי שלוחץ על הקישור מגיע ישר ליציאה ומסמן אם הוא בא.</p>':'');
+  const primary=(navigator.share&&IS_MOBILE)
+    ?`<button class="sharebtn big" data-act="share-native" data-id="${esc(ev.id)}">${SHARE_ICON}<span>שתפו עכשיו</span></button>`
+    :`<button class="sharebtn big" data-act="share-wa" data-id="${esc(ev.id)}"><span>💬 שלחו בוואטסאפ</span></button>`;
+  return head+`<div class="pad">
+    <div class="bubble">${esc(shareText(ev)).replace(/https?:\/\/\S+/g,u=>`<span class="lnk" dir="ltr">${u}</span>`).replace(/\n/g,'<br>')}</div>
+    ${primary}
+    <div class="actrow">
+      <button class="actbtn" data-act="copy-msg" data-id="${esc(ev.id)}">📋 העתק הודעה</button>
+      <button class="actbtn" data-act="copy-ev-link" data-id="${esc(ev.id)}">🔗 העתק קישור</button>
+    </div></div>`;
+}
+function openShareSheet(ev,justCreated){openSheet(shareSheetHTML(ev,justCreated));view={type:'share',id:ev.id}}
+async function shareNative(id){
+  const ev=state.events.find(e=>e.id===id);if(!ev)return;
+  try{await navigator.share({text:shareText(ev)});closeSheet()}catch(e){}
+}
+function shareWhatsApp(id){
+  const ev=state.events.find(e=>e.id===id);if(!ev)return;
+  // WhatsApp web links can garble emojis, so this path sends the same text without them
+  const plain=shareText(ev).replace(/[\p{Extended_Pictographic}️‍]/gu,'').split('\n').map(l=>l.trim()).join('\n').replace(/\n{3,}/g,'\n\n').trim();
   window.open('https://api.whatsapp.com/send?text='+encodeURIComponent(plain),'_blank','noopener');
+}
+async function copyText(text,okMsg){
+  try{await navigator.clipboard.writeText(text);toast(okMsg)}
+  catch(e){toast('לא הצלחנו להעתיק')}
 }
 /* ---------- calendar + navigate ---------- */
 const CAL_END_AFTER=3*3600e3; // no end time is stored, so the calendar event defaults to 3 hours
 function calendarUrl(ev){
   const start=new Date(ev.when),end=new Date(ev.when+CAL_END_AFTER);
   const f=d=>d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+'T'+pad(d.getHours())+pad(d.getMinutes())+'00';
-  const back=(window.APP_CONFIG&&window.APP_CONFIG.SHARE_URL)||(IS_NATIVE?'':location.href.split('#')[0]);
-  const details=[ev.description,back?'פרטים ועדכון סטטוס: '+back+'?event='+encodeURIComponent(ev.id):null].filter(Boolean).join('\n\n');
+  const back=eventUrl(ev.id);
+  const details=[ev.description,back?'פרטים ועדכון סטטוס: '+back:null].filter(Boolean).join('\n\n');
   const p=new URLSearchParams({action:'TEMPLATE',text:ev.place,dates:f(start)+'/'+f(end),details,location:ev.place,ctz:'Asia/Jerusalem'});
   return 'https://calendar.google.com/calendar/render?'+p.toString();
 }
@@ -541,8 +686,9 @@ function openNav(id){
 
 /* ---------- rides ---------- */
 function ridesHTML(ev){
-  const myRide=ev.rides.find(r=>r.passengers.includes(myId()));
-  const myCar =ev.rides.find(r=>r.driver===myId());
+  const role=rideRole(ev,myId());
+  const myRide=role&&role.type==='passenger'?role.ride:null;
+  const myCar =role&&role.type==='driver'?role.ride:null;
   let h='<div class="grp rides"><div class="gh">🚗 רכבים</div>';
   if(myRide){
     h+=`<div class="mystatus">🚗 אתה נוסע עם <b>${esc(myRide.driver)}</b>
@@ -551,31 +697,64 @@ function ridesHTML(ev){
   if(!ev.rides.length){
     h+='<p class="dash" style="margin:2px 0 0">עדיין אין רכבים. תהיו הראשונים.</p>';
   }else{
-    ev.rides.forEach(r=>{
+    // my own car first, then the rest in the order they were added
+    const list=myCar?[myCar,...ev.rides.filter(r=>r!==myCar)]:ev.rides;
+    list.forEach(r=>{
       const free=r.seats-r.passengers.length;
-      const isMine=r.driver===myId();
+      const isMine=r===myCar,imIn=r===myRide;
       const passHTML=r.passengers.length
-        ?r.passengers.map(p=>`<span class="pill yes">${esc(p)}${isMine?`<button class="pillx" data-act="kick" data-rid="${esc(r.id)}" data-name="${esc(p)}" aria-label="הסר את ${esc(p)}">✕</button>`:''}</span>`).join('')
+        ?r.passengers.map(p=>`<span class="pill yes${me&&p===me.id?' me':''}">${esc(p)}${isMine?`<button class="pillx" data-act="kick" data-rid="${esc(r.id)}" data-name="${esc(p)}" aria-label="הסר את ${esc(p)}">✕</button>`:''}</span>`).join('')
         :'<span class="dash">אין נוסעים עדיין</span>';
       let btn;
-      if(isMine)btn=`<button class="del" data-act="del-ride" data-rid="${esc(r.id)}">🗑️ מחק את הרכב</button>`;
-      else if(myRide&&myRide.id===r.id)btn='';
+      if(isMine)btn=`<button class="del" data-act="del-ride" data-rid="${esc(r.id)}" data-n="${r.passengers.length}">🗑️ בטל את הרכב שלי</button>`;
+      else if(imIn)btn='';
       else if(free<=0)btn='<button class="ridebtn" disabled>אין מקומות פנויים</button>';
+      else if(myCar)btn=`<button class="ridebtn blocked" data-act="join-blocked" data-rid="${esc(r.id)}" aria-describedby="why-${esc(r.id)}">הצטרף לרכב</button>`;
       else btn=`<button class="ridebtn" data-act="join-ride" data-rid="${esc(r.id)}">${myRide?'עבור לרכב הזה':'הצטרף לרכב'}</button>`;
-      h+=`<div class="ride">
+      h+=`<div class="ride${isMine?' mine':''}${imIn?' in':''}">
         <div class="rhead"><span class="rdrv">🚗 ${esc(r.driver)}${isMine?' <span class="you">(אתה)</span>':''}</span>
-          <span class="rseats">${free>0?free+' מקומות פנוי'+(free===1?'':'ים'):'מלא'}</span></div>
+          <span class="rseats${free<=0?' full':''}">${free>0?free+' מקומות פנוי'+(free===1?'':'ים'):'מלא'}</span></div>
         ${r.pickup?`<div class="rmeta">📍 ${esc(r.pickup)}</div>`:''}${r.note?`<div class="rmeta">${esc(r.note)}</div>`:''}
         <div class="pills" style="margin-top:8px">${passHTML}</div>
         ${btn}
       </div>`;
     });
   }
-  const noCar=state.people.filter(p=>ev.rsvps[p.id]==='yes'&&!ev.rides.some(r=>r.driver===p.id||r.passengers.includes(p.id)));
-  if(noCar.length)h+=`<div class="nocar"><span class="gh" style="margin-bottom:6px">🚶 ללא רכב</span><div class="pills">${noCar.map(p=>`<span class="pill none">${esc(p.name)}</span>`).join('')}</div></div>`;
-  if(!myCar)h+=`<button class="ridebtn add" data-act="ride-form" data-id="${esc(ev.id)}">🚗 אני מוציא רכב</button>`;
+  const noCar=state.people.filter(p=>ev.rsvps[p.id]==='yes'&&!rideRole(ev,p.id));
+  if(noCar.length)h+=`<div class="nocar"><span class="gh" style="margin-bottom:6px">🚶 ללא רכב</span><div class="pills">${noCar.map(p=>`<span class="pill none${me&&p.id===me.id?' me':''}">${esc(p.name)}</span>`).join('')}</div></div>`;
+  if(!myCar){
+    h+=myRide
+      ?`<button class="ridebtn add blocked" data-act="drive-blocked" data-id="${esc(ev.id)}">🚗 אני מוציא רכב</button>`
+      :`<button class="ridebtn add" data-act="ride-form" data-id="${esc(ev.id)}">🚗 אני מוציא רכב</button>`;
+  }
   h+='</div>';
   return h;
+}
+
+// A contradicting action: explain in one line why, and offer the clean way to switch
+function blockedHTML(ev,kind,rideId){
+  const role=rideRole(ev,myId());
+  let title,text,go;
+  if(kind==='drive'&&role&&role.type==='passenger'){
+    title=`אתה כבר נוסע עם ${esc(role.ride.driver)}`;
+    text='אי אפשר גם לנסוע ברכב של מישהו וגם להוציא רכב.';
+    go=`<button class="submit" data-act="drive-switch" data-id="${esc(ev.id)}">צא מהרכב והוצא רכב</button>`;
+  }else if(kind==='join'&&role&&role.type==='driver'){
+    const target=ev.rides.find(r=>String(r.id)===String(rideId));if(!target)return '';
+    const n=role.ride.passengers.length;
+    title='אתה מוציא רכב ביציאה הזו';
+    text='אי אפשר גם להוציא רכב וגם לנסוע עם מישהו אחר.'
+      +(n?` אם תעבור, הרכב שלך יבוטל ו${n===1?'הנוסע שלך יישאר':'-'+n+' הנוסעים שלך יישארו'} בלי רכב.`:'');
+    go=`<button class="submit" data-act="join-switch" data-rid="${esc(target.id)}">בטל את הרכב שלי ועבור ל${esc(target.driver)}</button>`;
+  }else return '';
+  return `<div class="grab"></div><div class="dhead"><h2 class="dt">${title}</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
+    <div class="pad"><p class="why">${text}</p>${go}<button class="cancel wide" data-act="back-detail">השאר כמו שזה</button></div>`;
+}
+function openBlocked(eventId,kind,rideId){
+  const ev=state.events.find(e=>e.id===eventId);if(!ev)return;
+  const html=blockedHTML(ev,kind,rideId);
+  if(!html){refreshSheet();return}   // the state already changed under us: just show the fresh details
+  openSheet(html);view={type:'blocked',id:eventId};
 }
 
 const delBtn=ev=>`<button class="del" data-act="del" data-id="${esc(ev.id)}">🗑️ מחק יציאה</button>`;
@@ -587,12 +766,12 @@ function detailHTML(ev){
   let h=`<div class="grab"></div><div class="dhead" style="--h:${k.h}"><span class="tile">${k.e}</span>
     <div class="ctxt"><h2 class="dt">${esc(ev.place)}</h2><div class="cwhen">${sub}</div></div>
     <button class="x" data-act="close" aria-label="סגור">✕</button></div>`;
-  if(!isPast)h+=`<div class="actrow">${navBtn(ev)}${calBtn(ev)}</div>`;
+  if(!isPast)h+=shareBtn(ev)+`<div class="actrow">${navBtn(ev)}${calBtn(ev)}</div>`;
   if(ev.description)h+=`<p class="descr">${esc(ev.description)}</p>`;
   if(isPast){
     h+=grp('yes','🟢','הגיעו',g.yes)+delBtn(ev)+'<div class="pad"></div>';
   }else{
-    h+=shareBtn(ev)+grp('yes','🟢','מגיעים',g.yes)+grp('maybe','🟡','אולי',g.maybe)
+    h+=grp('yes','🟢','מגיעים',g.yes)+grp('maybe','🟡','אולי',g.maybe)
       +grp('none','⚪','עדיין לא ענו',g.none)+grp('no','🔴','לא מגיעים',g.no)
       +ridesHTML(ev)
       +(canEdit?`<button class="edit" data-act="edit" data-id="${esc(ev.id)}">✏️ ערוך יציאה</button>`:'')
@@ -691,7 +870,12 @@ function submitForm(){
   }else{
     const ev={kind:form.kind,place,when,transport:form.transport,description,by:me.id,rsvps:{[me.id]:'yes'}};
     closeSheet();
-    enqueue(()=>store.addEvent(ev)).then(()=>toast('היציאה נוצרה 🎉')).catch(writeFail);
+    enqueue(()=>store.addEvent(ev)).then(id=>{
+      celebrate();
+      // the moment to bring the group in: offer to share right away (only if nothing else was opened meanwhile)
+      const created=id&&state.events.find(e=>e.id===String(id));
+      if(created&&!sheetEl)openShareSheet(created,true);else toast('היציאה נוצרה 🎉');
+    }).catch(writeFail);
   }
 }
 function openEditForm(id){
@@ -701,12 +885,18 @@ function openEditForm(id){
 
 /* ---------- ride form ---------- */
 let rform=null;
-function openRideForm(eventId){
+// sw=true: the user is a passenger right now and chose "leave that car and drive instead"
+function openRideForm(eventId,sw){
   if(!me)return;
-  rform={eventId,seats:3,pickup:'',note:''};
+  const ev=state.events.find(e=>e.id===eventId);if(!ev)return;
+  const role=rideRole(ev,me.id);
+  if(role&&role.type==='driver'){openDetail(eventId);return}
+  if(role&&role.type==='passenger'&&!sw){openBlocked(eventId,'drive');return}
+  rform={eventId,seats:3,pickup:'',note:'',sw:!!sw};
+  const leaving=role&&role.type==='passenger'?`<p class="why">תצא מהרכב של <b>${esc(role.ride.driver)}</b> ותוציא רכב משלך.</p>`:'';
   openSheet(`<div class="grab"></div>
-    <div class="dhead"><h2 class="dt">אני מוציא רכב</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
-    <div>
+    <div class="dhead"><h2 class="dt">אני מוציא רכב</h2><button class="x" data-act="back-detail" aria-label="סגור">✕</button></div>
+    <div>${leaving}
       <div class="fl">כמה מקומות פנויים? (בלי הנהג)</div>
       <div class="stepper">
         <button class="stbtn" data-act="seat-dec" aria-label="פחות מקומות">－</button>
@@ -715,11 +905,11 @@ function openRideForm(eventId){
       </div>
       <div class="fl">מאיפה יוצאים? (לא חובה)</div>
       <input class="txt" id="r-pickup" maxlength="60" placeholder="לדוגמה: מהקניון" autocomplete="off" enterkeyhint="done">
-      <div class="fl">הערה לנהג (לא חובה)</div>
+      <div class="fl">הערה לנוסעים (לא חובה)</div>
       <input class="txt" id="r-note" maxlength="80" placeholder="לדוגמה: יוצא ב-21:00 בדיוק" autocomplete="off" enterkeyhint="done">
       <div class="formbar"><button class="submit" data-act="ride-submit">🚗 הוסף רכב</button></div>
     </div>`);
-  view={type:'ride-form'};
+  view={type:'ride-form',id:eventId};
 }
 function stepSeats(d){
   if(!rform)return;
@@ -729,31 +919,42 @@ function stepSeats(d){
 function submitRide(){
   if(!rform||!me)return;
   const pickup=$('#r-pickup').value.trim(),note=$('#r-note').value.trim();
-  const eventId=rform.eventId,seats=rform.seats;
-  closeSheet();
-  enqueue(()=>store.createRide(eventId,me.id,seats,pickup,note))
-    .then(()=>toast('הרכב נוסף 🚗')).catch(writeFail);
-  ensureGoing(eventId);   // driving means you're attending
+  const {eventId,seats,sw}=rform;rform=null;
+  openDetail(eventId);   // back to the outing, where the new car shows up
+  enqueue(()=>store.createRide(eventId,me.id,seats,pickup,note,sw))
+    .then(()=>{toast('הרכב נוסף 🚗');celebrate()}).catch(writeFail);
 }
-function joinRide(eventId,rideId){
+// sw=true: the user is a driver right now and chose "cancel my car and ride with them"
+function joinRide(eventId,rideId,sw){
   if(!me)return;
-  enqueue(()=>store.joinRide(eventId,rideId,me.id)).then(()=>toast('הצטרפת לרכב')).catch(writeFail);
-  ensureGoing(eventId);   // needing a ride means you're attending
-}
-function ensureGoing(eventId){
-  const ev=state.events.find(e=>e.id===eventId);
-  if(ev&&me&&ev.rsvps[me.id]!=='yes')enqueue(()=>store.setRsvp(eventId,me.id,'yes')).catch(()=>{});
+  const ev=state.events.find(e=>e.id===eventId);if(!ev)return;
+  const role=rideRole(ev,me.id),target=ev.rides.find(r=>String(r.id)===String(rideId));
+  if(!target)return;
+  if(role&&role.type==='driver'&&!sw){openBlocked(eventId,'join',rideId);return}
+  const wasGoing=ev.rsvps[me.id]==='yes';
+  const msg=role&&role.type==='passenger'?'עברת לרכב של '+target.driver
+    :'הצטרפת לרכב של '+target.driver+(wasGoing?'':' · סומנת כמגיע');
+  if(!sheetEl||!view||view.type!=='detail')openDetail(eventId);
+  enqueue(()=>store.joinRide(eventId,rideId,me.id,sw)).then(()=>{toast(msg);celebrate()}).catch(writeFail);
 }
 function leaveRide(eventId,rideId){
   if(!me)return;
-  enqueue(()=>store.leaveRide(eventId,rideId,me.id)).catch(writeFail);
+  enqueue(()=>store.leaveRide(eventId,rideId,me.id)).then(()=>toast('יצאת מהרכב')).catch(writeFail);
 }
 function kickPassenger(eventId,rideId,name){
   enqueue(()=>store.leaveRide(eventId,rideId,name)).then(()=>toast(name+' הוסר מהרכב')).catch(writeFail);
 }
-function deleteRide(eventId,rideId){
+// Cancelling a car with passengers affects other people: ask for a second tap (no extra screen)
+function deleteRide(eventId,el){
   if(!me)return;
-  enqueue(()=>store.deleteRide(eventId,rideId,me.id)).then(()=>toast('הרכב נמחק')).catch(writeFail);
+  const n=Number(el.dataset.n)||0;
+  if(n>0&&!el.dataset.armed){
+    el.dataset.armed='1';el.classList.add('armed');
+    el.textContent=n===1?'הנוסע שלך יישאר בלי רכב. לחצו שוב':'ה-'+n+' נוסעים שלך יישארו בלי רכב. לחצו שוב';
+    setTimeout(()=>{if(el.isConnected){delete el.dataset.armed;el.classList.remove('armed');el.textContent='🗑️ בטל את הרכב שלי'}},4000);
+    return;
+  }
+  enqueue(()=>store.deleteRide(eventId,el.dataset.rid,me.id)).then(()=>toast('הרכב בוטל')).catch(writeFail);
 }
 
 /* ---------- rename / delete ---------- */
@@ -790,20 +991,43 @@ function deleteEvent(el){
 }
 
 /* ---------- RSVP ---------- */
+let tapped=null;   // the RSVP button just pressed gets a one-time "pop"
 function setRsvp(id,s){
   const ev=state.events.find(e=>e.id===id);
   if(!ev||!me||ev.rsvps[me.id]===s)return;
-  enqueue(()=>store.setRsvp(id,me.id,s)).catch(writeFail);
+  // Only "going" people can be in a car: anything else takes them out (the store + database do it; we just say so)
+  const role=s!=='yes'?rideRole(ev,me.id):null;
+  tapped=id+'|'+s;setTimeout(()=>{tapped=null},700);
+  if(s==='yes')celebrate();
+  enqueue(()=>store.setRsvp(id,me.id,s)).then(()=>{
+    if(!role)return;
+    if(role.type==='passenger')toast('יצאת מהרכב של '+role.ride.driver);
+    else{const n=role.ride.passengers.length;toast(n?'הרכב שלך בוטל · '+(n===1?'הנוסע חזר':n+' נוסעים חזרו')+' לרשימת ״ללא רכב״':'הרכב שלך בוטל')}
+  }).catch(writeFail);
 }
+function celebrate(){try{if(navigator.vibrate)navigator.vibrate(12)}catch(e){}}
 
 /* ---------- name gate ---------- */
 function showGate(){
   const g=document.createElement('div');g.className='gate';g.id='gate';
+  const invited=!!pendingEventId;
   g.innerHTML=`<div class="gin"><div class="brand">יוצאים?</div>
+    ${invited?'<div class="invite" id="invite" hidden></div>':''}
     <div class="q">איך קוראים לך?</div>
     <input class="txt" id="g-name" maxlength="20" autocomplete="off" enterkeyhint="go" aria-label="איך קוראים לך?">
-    <button class="submit" data-act="gate">המשך</button></div>`;
+    <button class="submit" data-act="gate">${invited?'כניסה ליציאה':'המשך'}</button></div>`;
   document.body.appendChild(g);
+  paintInvite();
+}
+// Arrived through a shared link: show what they were invited to, right on the name screen
+function paintInvite(){
+  const box=$('#invite');if(!box)return;
+  const ev=pendingEventId&&state.events.find(e=>e.id===pendingEventId);
+  if(!ev){box.hidden=true;return}
+  const k=KINDS[ev.kind],n=groups(ev).yes.length;
+  box.hidden=false;
+  box.innerHTML=`<div class="inv-k">הזמינו אותך 👋</div><div class="inv-t">${k.e} ${esc(ev.place)}</div>
+    <div class="inv-w">${esc(whenLabel(ev.when))}${n?' · '+n+' כבר '+(n===1?'מגיע':'מגיעים'):''}</div>`;
 }
 function submitGate(){
   const inp=$('#g-name'),name=inp.value.trim();
@@ -831,7 +1055,12 @@ document.addEventListener('click',e=>{
   else if(a==='join-ride'){if(view&&view.type==='detail')joinRide(view.id,rid_)}
   else if(a==='leave-ride'){if(view&&view.type==='detail')leaveRide(view.id,rid_)}
   else if(a==='kick'){if(view&&view.type==='detail')kickPassenger(view.id,rid_,name_)}
-  else if(a==='del-ride'){if(view&&view.type==='detail')deleteRide(view.id,rid_)}
+  else if(a==='del-ride'){if(view&&view.type==='detail')deleteRide(view.id,el)}
+  else if(a==='join-blocked'){if(view&&view.type==='detail')openBlocked(view.id,'join',rid_)}
+  else if(a==='drive-blocked')openBlocked(id,'drive');
+  else if(a==='drive-switch')openRideForm(id,true);
+  else if(a==='join-switch'){if(view&&view.type==='blocked')joinRide(view.id,rid_,true)}
+  else if(a==='back-detail'){if(view&&view.id)openDetail(view.id);else closeSheet()}
   else if(a==='kind'){form.kind=el.dataset.v;syncForm()}
   else if(a==='dm'){
     form.dm=el.dataset.v;
@@ -845,6 +1074,10 @@ document.addEventListener('click',e=>{
   else if(a==='rename-save')saveRename();
   else if(a==='del')deleteEvent(el);
   else if(a==='share')shareEvent(id);
+  else if(a==='share-native')shareNative(id);
+  else if(a==='share-wa')shareWhatsApp(id);
+  else if(a==='copy-msg'){const ev=state.events.find(x=>x.id===id);if(ev)copyText(shareText(ev),'ההודעה הועתקה, אפשר להדביק בקבוצה')}
+  else if(a==='copy-ev-link')copyText(eventUrl(id)||location.href.split('#')[0],'הקישור הועתק');
   else if(a==='tm'){$('#f-time').value=el.dataset.v;syncForm()}
   else if(a==='install')doInstall();
   else if(a==='copy-link')copyLink();
@@ -867,7 +1100,8 @@ setInterval(render,60000);
 /* ---------- boot ---------- */
 (async function boot(){
   render();
-  if(!me){if(shouldOnboard())showOnboarding();else showGate()}
+  // came from a shared link: straight to the name, then the outing (the install offer can wait)
+  if(!me){if(shouldOnboard()&&!pendingEventId)showOnboarding();else showGate()}
   if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)&&!IS_NATIVE){
     window.addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').catch(()=>{})});
   }

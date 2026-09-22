@@ -191,22 +191,21 @@ html.standalone body::before{content:"";position:fixed;top:0;left:0;right:0;heig
 .formbar{position:sticky;bottom:0;background:var(--surface);margin:10px -18px 0;padding:12px 18px calc(14px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line)}
 .formbar .submit{margin-top:0}
 
-/* ---------- share on WhatsApp ---------- */
-.wa{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;height:46px;margin-top:16px;border-radius:14px;background:var(--yes-bg);color:var(--yes);font-weight:800}
 
 /* ---------- v3: description, calendar/navigate, edit, rides ---------- */
 .descr{margin:14px 0 0;padding:14px;background:var(--chip);border-radius:14px;font-size:15px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
 .area{height:auto;min-height:84px;padding:12px 14px;resize:vertical;line-height:1.4;font-family:inherit}
 
 .actrow{display:flex;gap:8px;margin-top:14px}
-.actbtn{flex:1;height:46px;border-radius:14px;background:var(--chip);color:var(--ink);font-weight:800;display:flex;align-items:center;justify-content:center;gap:6px;text-align:center}
+.actbtn{flex:1;height:46px;border-radius:14px;background:var(--chip);color:var(--ink);font-weight:800;display:flex;align-items:center;justify-content:center;gap:6px;text-align:center;text-decoration:none;transition:transform .12s}
+.actbtn:active{transform:scale(.97)}
 
 .edit{display:block;width:100%;height:48px;margin-top:16px;border-radius:14px;background:var(--chip);color:var(--ink);font-weight:800}
 .cancel{flex:1;height:56px;border-radius:18px;background:var(--chip);color:var(--ink-2);font-weight:700}
 .formbar:has(.cancel){display:flex;gap:8px}
 .formbar:has(.cancel) .submit{flex:1.4;margin-top:0}
 
-.navrow{display:flex;align-items:center;gap:14px;padding:16px 6px;border-bottom:1px solid var(--line);font-weight:700;font-size:17px}
+.navrow{display:flex;align-items:center;gap:14px;padding:16px 6px;border-bottom:1px solid var(--line);font-weight:700;font-size:17px;color:var(--ink);text-decoration:none}
 .navrow:last-child{border-bottom:0}
 .nave{font-size:24px;width:30px;text-align:center;flex:none}
 
@@ -226,3 +225,55 @@ html.standalone body::before{content:"";position:fixed;top:0;left:0;right:0;heig
 .ridebtn:disabled{opacity:.5}
 .ridebtn.add{background:hsl(38 92% 72%);color:var(--hero-ink);margin-top:16px}
 .nocar{margin-top:14px}
+
+/* ---------- v4: share, ride rules, feedback ---------- */
+:root{--share-bg:#12A150;--share-ink:#FFFFFF;--bubble:#DCF8C6;--bubble-ink:#111B21}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--share-bg:#25D366;--share-ink:#062812;--bubble:#005C4B;--bubble-ink:#E9EDEF}}
+:root[data-theme="dark"]{--share-bg:#25D366;--share-ink:#062812;--bubble:#005C4B;--bubble-ink:#E9EDEF}
+
+/* Share: the one colored action in the details sheet */
+.sharebtn{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;height:54px;margin-top:16px;border-radius:16px;
+  background:var(--share-bg);color:var(--share-ink);font-weight:800;font-size:17px;
+  box-shadow:0 8px 20px -10px var(--share-bg);transition:transform .12s,filter .15s}
+.sharebtn:active{transform:scale(.98);filter:brightness(.95)}
+.sharebtn.big{height:58px;font:400 20px/1 var(--display);margin-top:16px}
+.sharebtn svg{flex:none}
+.hrt{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.hshare{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 12px;border-radius:99px;background:rgba(255,255,255,.62);color:var(--hero-ink);font-weight:800;font-size:14.5px;transition:transform .12s}
+.hshare:active{transform:scale(.95)}
+.hshare svg{width:17px;height:17px}
+
+.shsub{margin:8px 0 0;color:var(--ink-2);font-weight:600;font-size:15px;line-height:1.45}
+.bubble{margin:16px 0 0;padding:12px 14px 14px;border-radius:18px 18px 18px 6px;background:var(--bubble);color:var(--bubble-ink);
+  font-size:15px;line-height:1.5;overflow-wrap:anywhere;-webkit-user-select:text;user-select:text;box-shadow:0 1px 1px rgba(0,0,0,.08)}
+.pad>.actrow{margin-top:10px}
+
+/* Ride rules: a blocked action still looks tappable, but clearly secondary; tapping explains why */
+.ridebtn.blocked{background:transparent;color:var(--ink-2);box-shadow:inset 0 0 0 1.5px var(--line)}
+.ridebtn.blocked::before{content:"🔒";margin-inline-end:6px;font-size:13px}
+.ridebtn.add.blocked{background:transparent;color:var(--ink-2)}
+.ride.mine,.ride.in{box-shadow:inset 0 0 0 2px var(--yes)}
+.rseats.full{color:var(--no)}
+.why{margin:12px 0 0;color:var(--ink-2);font-weight:600;font-size:16px;line-height:1.5}
+.why b{color:var(--ink)}
+.cancel.wide{display:block;width:100%;height:52px;margin-top:10px}
+.del{transition:background .15s}
+
+/* Invite on the name screen (arrived from a shared link) */
+.invite{margin:30px 0 -18px;padding:14px 16px;border-radius:20px;background:rgba(255,255,255,.62);animation:rise .35s cubic-bezier(.2,.8,.2,1)}
+.inv-k{font-weight:800;font-size:14px;opacity:.75}
+.inv-t{font:400 26px/1.15 var(--display);margin:4px 0 2px;overflow-wrap:anywhere}
+.inv-w{font-weight:700}
+
+/* Gentle feedback */
+.hb,.sb,.cbtn,.ridebtn,.submit,.fab{transition:transform .12s,background-color .18s,color .18s}
+.hb:active,.sb:active,.cbtn:active,.ridebtn:active{transform:scale(.97)}
+.hb.pop,.sb.pop{animation:pop .38s cubic-bezier(.34,1.56,.64,1)}
+@keyframes pop{0%{transform:scale(.92)}60%{transform:scale(1.05)}100%{transform:scale(1)}}
+.toast.in{animation:toastin .25s cubic-bezier(.2,.8,.2,1)}
+@keyframes toastin{from{opacity:0;transform:translate(-50%,8px)}to{opacity:1;transform:translate(-50%,0)}}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+/* while a sheet is open its sticky buttons own the bottom edge: show messages at the top instead */
+html.lock .toast{bottom:auto;top:calc(14px + env(safe-area-inset-top,0px))}
+.bubble .lnk{color:#027EB5;text-decoration:underline;word-break:break-all;unicode-bidi:isolate}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .bubble .lnk{color:#53BDEB}}
