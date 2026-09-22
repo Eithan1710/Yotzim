@@ -1,39 +1,1188 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="color-scheme" content="light dark">
-<title>יוצאים?</title>
-
-<!-- PWA: manifest + icons + iOS tags. All paths are relative so it works on GitHub Pages sub-paths. -->
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Event Planner</title>
 <link rel="manifest" href="manifest.json">
-<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<meta name="theme-color" content="#ECEEF5" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#12131C" media="(prefers-color-scheme: dark)">
-<meta name="mobile-web-app-capable" content="yes">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="יוצאים">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<script>
-  // Mark the page as "opened from the home screen" as early as possible
-  if (navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)) {
-    document.documentElement.classList.add('standalone');
-  }
-</script>
-
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Event Planner">
+<meta name="theme-color" content="#FFFFFF">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;600;800&family=Secular+One&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+:root{
+  --bg:#F6F7FB;
+  --surface:#FFFFFF;
+  --surface-2:#F2F4F9;
+  --surface-3:#EAEDF5;
+  --border:#E7EAF2;
+  --border-strong:#D8DDEA;
+  --text:#111420;
+  --text-2:#4A5068;
+  --muted:#8A90A6;
+  --accent:#5B5BF5;
+  --accent-2:#4F46E5;
+  --accent-soft:#EEEEFE;
+  --danger:#EF4444;
+  --danger-soft:#FEECEC;
+  --ok:#10B981;
+  --shadow-xs:0 1px 2px rgba(17,20,32,.05);
+  --shadow-sm:0 1px 2px rgba(17,20,32,.04), 0 2px 6px rgba(17,20,32,.05);
+  --shadow-md:0 6px 16px -4px rgba(17,20,32,.10), 0 2px 6px rgba(17,20,32,.05);
+  --shadow-lg:0 24px 48px -16px rgba(17,20,32,.22);
+  --r-xs:8px; --r-sm:11px; --r-md:15px; --r-lg:20px; --r-xl:26px;
+  --sat:env(safe-area-inset-top,0px);
+  --sab:env(safe-area-inset-bottom,0px);
+  --hour-h:56px;
+  --day-w:84px;
+  --gutter-w:54px;
+}
+@media (min-width:900px){
+  :root{ --day-w:120px; --gutter-w:64px; --hour-h:60px; }
+}
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+html,body{margin:0; padding:0; height:100%;}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:'Heebo',-apple-system,BlinkMacSystemFont,sans-serif;
+  min-height:100dvh; overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+button{font-family:inherit; cursor:pointer; border:none; background:none; color:inherit;}
+input,textarea,select{font-family:inherit;}
+::-webkit-scrollbar{width:9px; height:9px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:#D3D8E6; border-radius:9px; border:2px solid transparent; background-clip:padding-box;}
+::-webkit-scrollbar-thumb:hover{background:#BFC5D8; background-clip:padding-box;}
+
+/* ============ Layout ============ */
+.app{display:flex; flex-direction:column; height:100dvh; padding-top:var(--sat);}
+
+.topbar{
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:14px 18px; background:var(--surface);
+  border-bottom:1px solid var(--border); flex-shrink:0; z-index:30;
+}
+.brand{display:flex; align-items:center; gap:9px; font-size:16px; font-weight:800; letter-spacing:-.3px;}
+.brand .logo{
+  width:30px; height:30px; border-radius:9px;
+  background:linear-gradient(135deg,var(--accent),#8B5CF6);
+  display:flex; align-items:center; justify-content:center; font-size:15px;
+  box-shadow:0 4px 10px -3px rgba(91,91,245,.5);
+}
+.topbar-actions{display:flex; align-items:center; gap:8px;}
+
+.icon-btn{
+  width:38px; height:38px; border-radius:var(--r-sm);
+  display:flex; align-items:center; justify-content:center;
+  color:var(--text-2); font-size:15px;
+  border:1px solid var(--border); background:var(--surface);
+  transition:background .15s, border-color .15s, transform .1s;
+}
+.icon-btn:hover{background:var(--surface-2); border-color:var(--border-strong);}
+.icon-btn:active{transform:scale(.94);}
+.icon-btn.active{background:var(--accent-soft); color:var(--accent); border-color:#D9D9FB;}
+
+.btn{
+  display:inline-flex; align-items:center; justify-content:center; gap:7px;
+  border-radius:var(--r-sm); padding:10px 15px; font-size:13.5px; font-weight:600;
+  transition:background .15s, transform .1s, box-shadow .15s, opacity .15s;
+  white-space:nowrap;
+}
+.btn:active{transform:scale(.97);}
+.btn-primary{
+  background:var(--accent); color:#fff;
+  box-shadow:0 6px 14px -6px rgba(91,91,245,.65);
+}
+.btn-primary:hover{background:var(--accent-2);}
+.btn-ghost{background:var(--surface-2); color:var(--text-2);}
+.btn-ghost:hover{background:var(--surface-3);}
+.btn-danger{background:var(--danger-soft); color:var(--danger);}
+.btn-danger:hover{background:#FBDCDC;}
+.btn-outline{background:var(--surface); border:1px solid var(--border); color:var(--text-2);}
+.btn-outline:hover{background:var(--surface-2); border-color:var(--border-strong);}
+.btn-connect{
+  background:var(--surface); border:1px solid var(--border); color:var(--text-2);
+  font-size:13px; font-weight:600; padding:9px 13px; border-radius:var(--r-sm);
+  display:inline-flex; align-items:center; gap:6px;
+  transition:all .15s;
+}
+.btn-connect:hover{background:var(--surface-2); border-color:var(--border-strong);}
+.btn-connect.connected{color:var(--ok); border-color:#C7F0E2; background:#F0FDF9;}
+.dot-live{width:7px; height:7px; border-radius:50%; background:var(--ok); box-shadow:0 0 0 3px rgba(16,185,129,.15);}
+
+/* ============ Toolbar ============ */
+.toolbar{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:11px 18px; background:var(--surface);
+  border-bottom:1px solid var(--border); flex-shrink:0; z-index:25;
+  flex-wrap:wrap;
+}
+.nav-group{display:flex; align-items:center; gap:6px;}
+.nav-btn{
+  width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center;
+  color:var(--text-2); font-size:17px; font-weight:600; line-height:1;
+  border:1px solid var(--border); background:var(--surface); transition:all .15s;
+}
+.nav-btn:hover{background:var(--surface-2);}
+.nav-btn:active{transform:scale(.94);}
+.btn-today{
+  padding:8px 14px; border-radius:10px; font-size:13px; font-weight:700;
+  border:1px solid var(--border); background:var(--surface); color:var(--text-2);
+  transition:all .15s;
+}
+.btn-today:hover{background:var(--surface-2); border-color:var(--border-strong);}
+.range-label{
+  font-size:16px; font-weight:800; letter-spacing:-.3px;
+  flex:1; min-width:120px;
+}
+.view-switch{
+  display:flex; gap:2px; background:var(--surface-2); border-radius:11px; padding:3px;
+}
+.view-switch button{
+  padding:7px 14px; border-radius:8px; font-size:12.5px; font-weight:600;
+  color:var(--muted); transition:all .16s;
+}
+.view-switch button:hover{color:var(--text-2);}
+.view-switch button.active{
+  background:var(--surface); color:var(--text);
+  box-shadow:var(--shadow-xs);
+}
+
+/* Search bar */
+.search-bar{
+  display:flex; align-items:center; gap:10px;
+  padding:10px 18px; background:var(--surface);
+  border-bottom:1px solid var(--border); flex-shrink:0;
+  animation:slideDown .2s ease;
+}
+@keyframes slideDown{from{opacity:0; transform:translateY(-6px);} to{opacity:1; transform:none;}}
+.search-bar input{
+  flex:1; border:none; background:transparent; font-size:15px; color:var(--text); padding:6px 0;
+}
+.search-bar input:focus{outline:none;}
+.search-bar input::placeholder{color:var(--muted);}
+.search-results{
+  background:var(--surface); border-bottom:1px solid var(--border);
+  max-height:280px; overflow-y:auto; flex-shrink:0;
+  animation:slideDown .2s ease;
+}
+.search-result{
+  display:flex; align-items:center; gap:12px; padding:12px 18px;
+  cursor:pointer; transition:background .13s;
+  border-bottom:1px solid var(--border);
+}
+.search-result:last-child{border-bottom:none;}
+.search-result:hover{background:var(--surface-2);}
+.sr-dot{width:9px; height:9px; border-radius:50%; flex-shrink:0;}
+.sr-main{flex:1; min-width:0;}
+.sr-title{font-size:14px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.sr-meta{font-size:12px; color:var(--muted); margin-top:2px;}
+.sr-empty{padding:22px 18px; text-align:center; color:var(--muted); font-size:13px;}
+
+/* ============ Main layout ============ */
+.layout{flex:1; display:flex; min-height:0; overflow:hidden;}
+.main{flex:1; display:flex; flex-direction:column; min-width:0; min-height:0;}
+.calendar-container{flex:1; min-height:0; overflow:hidden; position:relative;}
+
+/* ============ Next-up bar (mobile) ============ */
+.next-up{
+  display:flex; align-items:center; gap:10px;
+  margin:10px 14px 0; padding:11px 14px;
+  background:linear-gradient(135deg,#F5F5FF,#EEEEFE);
+  border:1px solid #E0E0FC; border-radius:var(--r-md);
+  cursor:pointer; transition:transform .12s, box-shadow .15s;
+  flex-shrink:0;
+}
+.next-up:active{transform:scale(.985);}
+.next-up .nu-ico{font-size:17px;}
+.next-up .nu-body{flex:1; min-width:0;}
+.next-up .nu-title{font-size:13.5px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.next-up .nu-sub{font-size:11.5px; color:var(--accent-2); font-weight:600; margin-top:1px;}
+.next-up .nu-count{
+  font-size:11.5px; font-weight:700; color:var(--accent);
+  background:#fff; padding:5px 10px; border-radius:100px; flex-shrink:0;
+  box-shadow:var(--shadow-xs);
+}
+
+/* ============ Time grid (day/week) ============ */
+.tg-scroll{
+  height:100%; overflow:auto; position:relative;
+  background:var(--surface);
+  scroll-behavior:smooth;
+}
+.tg-inner{min-width:100%; display:block; padding-bottom:60px;}
+
+.tg-header{
+  display:flex; position:sticky; top:0; z-index:20;
+  background:var(--surface); border-bottom:1px solid var(--border);
+}
+.tg-head-gutter{
+  flex:0 0 var(--gutter-w); width:var(--gutter-w);
+  position:sticky; inset-inline-start:0; z-index:3; background:var(--surface);
+}
+.tg-dayhead{
+  flex:1 0 var(--day-w); min-width:var(--day-w);
+  display:flex; flex-direction:column; align-items:center; gap:2px;
+  padding:11px 4px 10px; border-inline-start:1px solid var(--border);
+  transition:background .15s;
+}
+.tg-dayhead .dow{font-size:11px; font-weight:600; color:var(--muted); letter-spacing:.2px;}
+.tg-dayhead .dnum{
+  font-size:16px; font-weight:700; color:var(--text);
+  width:29px; height:29px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  transition:all .15s;
+}
+.tg-dayhead.is-today .dnum{background:var(--accent); color:#fff; box-shadow:0 3px 8px -2px rgba(91,91,245,.55);}
+.tg-dayhead.is-today .dow{color:var(--accent);}
+
+.tg-body{display:flex; position:relative;}
+.tg-gutter{
+  flex:0 0 var(--gutter-w); width:var(--gutter-w);
+  position:sticky; inset-inline-start:0; z-index:10;
+  background:var(--surface);
+}
+.tg-hour{
+  height:var(--hour-h); position:relative;
+}
+.tg-hour span{
+  position:absolute; top:-7px; inset-inline-end:9px;
+  font-size:10.5px; font-weight:500; color:var(--muted);
+  background:var(--surface); padding:0 3px;
+}
+.tg-hour:first-child span{display:none;}
+
+.tg-day{
+  flex:1 0 var(--day-w); min-width:var(--day-w);
+  position:relative; border-inline-start:1px solid var(--border);
+  cursor:pointer;
+}
+.tg-day.is-today{background:#FCFCFF;}
+.tg-day:hover{background:#FAFAFE;}
+.tg-lines{position:relative;}
+.tg-line{height:var(--hour-h); border-top:1px solid var(--border);}
+.tg-line:first-child{border-top:none;}
+
+.tg-event{
+  position:absolute; border-radius:9px; padding:5px 8px;
+  overflow:hidden; cursor:pointer; z-index:5;
+  border-inline-start:3px solid;
+  transition:transform .12s, box-shadow .15s, filter .15s;
+  box-shadow:0 1px 2px rgba(17,20,32,.06);
+  display:flex; flex-direction:column; gap:1px;
+}
+.tg-event:hover{filter:brightness(.97); box-shadow:0 4px 12px -4px rgba(17,20,32,.22); z-index:8;}
+.tg-event:active{transform:scale(.98);}
+.tg-event-title{
+  font-size:11.5px; font-weight:700; line-height:1.25;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.tg-event-time{font-size:10px; font-weight:500; opacity:.75;}
+
+.now-line{
+  position:absolute; inset-inline:0; height:2px; background:var(--danger);
+  z-index:9; pointer-events:none;
+}
+.now-line::before{
+  content:''; position:absolute; inset-inline-start:-4px; top:-4px;
+  width:10px; height:10px; border-radius:50%; background:var(--danger);
+  box-shadow:0 0 0 3px rgba(239,68,68,.18);
+}
+
+/* ============ Month view ============ */
+.month-scroll{height:100%; overflow:auto; background:var(--surface);}
+.month-grid{display:grid; grid-template-columns:repeat(7,1fr); min-width:100%;}
+.mh{
+  padding:10px 8px; font-size:11.5px; font-weight:700; color:var(--muted);
+  text-align:center; border-bottom:1px solid var(--border);
+  position:sticky; top:0; background:var(--surface); z-index:5;
+}
+.mcell{
+  min-height:112px; padding:6px; border-inline-start:1px solid var(--border);
+  border-bottom:1px solid var(--border); cursor:pointer; position:relative;
+  transition:background .13s; display:flex; flex-direction:column; gap:3px;
+}
+.mcell:hover{background:var(--surface-2);}
+.mcell.other{background:#FAFBFD;}
+.mcell.other .mnum{color:#C3C9DA;}
+.mcell.other .m-pill{opacity:.5;}
+.mnum{
+  font-size:12.5px; font-weight:700; color:var(--text-2);
+  width:23px; height:23px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  flex-shrink:0; align-self:flex-start;
+}
+.mcell.today .mnum{background:var(--accent); color:#fff; box-shadow:0 3px 8px -2px rgba(91,91,245,.55);}
+.m-pill{
+  font-size:10.5px; font-weight:600; padding:3px 7px; border-radius:6px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  border-inline-start:2.5px solid; cursor:pointer;
+  transition:transform .1s;
+}
+.m-pill:hover{transform:translateX(-1px);}
+.m-more{font-size:10px; font-weight:700; color:var(--muted); padding:2px 6px;}
+
+/* ============ Sidebar ============ */
+.sidebar{
+  width:322px; flex-shrink:0; background:var(--surface);
+  border-inline-start:1px solid var(--border);
+  display:flex; flex-direction:column; overflow:hidden;
+}
+.sb-head{
+  padding:16px 18px 12px; display:flex; align-items:center; justify-content:space-between;
+  flex-shrink:0;
+}
+.sb-head h2{font-size:14px; font-weight:800; margin:0; letter-spacing:-.2px;}
+.sb-count{
+  font-size:11px; font-weight:700; color:var(--accent);
+  background:var(--accent-soft); padding:3px 9px; border-radius:100px;
+}
+.sb-body{flex:1; overflow-y:auto; padding:0 14px 20px;}
+.sb-item{
+  display:flex; gap:11px; padding:12px; border-radius:var(--r-md);
+  cursor:pointer; transition:background .13s, transform .1s;
+  margin-bottom:5px; position:relative;
+}
+.sb-item:hover{background:var(--surface-2);}
+.sb-item:active{transform:scale(.985);}
+.sb-item.next{background:linear-gradient(135deg,#F5F5FF,#EEEEFE); border:1px solid #E4E4FD;}
+.sb-bar{width:3.5px; border-radius:3px; flex-shrink:0;}
+.sb-content{flex:1; min-width:0;}
+.sb-title{
+  font-size:13.5px; font-weight:700; line-height:1.3;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.sb-meta{font-size:11.5px; color:var(--muted); margin-top:3px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;}
+.sb-countdown{
+  font-size:11px; font-weight:700; color:var(--accent);
+  margin-top:5px; display:inline-block;
+}
+.sb-empty{
+  padding:40px 20px; text-align:center;
+}
+.sb-empty .emoji{font-size:34px; margin-bottom:10px; opacity:.5;}
+.sb-empty .t{font-size:13.5px; font-weight:700; color:var(--text-2); margin-bottom:4px;}
+.sb-empty .s{font-size:12px; color:var(--muted); line-height:1.55;}
+
+/* ============ FAB ============ */
+.fab{
+  position:fixed; bottom:calc(var(--sab) + 20px); inset-inline-start:20px;
+  width:56px; height:56px; border-radius:50%;
+  background:var(--accent); color:#fff; font-size:26px; font-weight:300;
+  display:none; align-items:center; justify-content:center;
+  box-shadow:0 12px 26px -8px rgba(91,91,245,.7), 0 4px 10px rgba(17,20,32,.12);
+  z-index:60; transition:transform .14s, box-shadow .18s;
+  line-height:1;
+}
+.fab:hover{transform:translateY(-2px); box-shadow:0 16px 32px -8px rgba(91,91,245,.75);}
+.fab:active{transform:scale(.93);}
+
+/* ============ Modal ============ */
+.backdrop{
+  position:fixed; inset:0; background:rgba(17,20,32,.38);
+  backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px);
+  opacity:0; pointer-events:none; transition:opacity .22s; z-index:90;
+}
+.backdrop.show{opacity:1; pointer-events:auto;}
+
+.modal{
+  position:fixed; inset:0; z-index:100; display:none;
+  align-items:center; justify-content:center; padding:18px;
+}
+.modal.show{display:flex;}
+.modal-card{
+  background:var(--surface); border-radius:var(--r-xl); width:100%; max-width:452px;
+  max-height:88vh; overflow-y:auto; box-shadow:var(--shadow-lg);
+  animation:modalIn .24s cubic-bezier(.2,.9,.3,1);
+}
+@keyframes modalIn{from{opacity:0; transform:translateY(14px) scale(.97);} to{opacity:1; transform:none;}}
+@keyframes sheetIn{from{transform:translateY(100%);} to{transform:none;}}
+@media (max-width:640px){
+  .modal{align-items:flex-end; padding:0;}
+  .modal-card{
+    max-width:100%; border-radius:24px 24px 0 0; max-height:92vh;
+    padding-bottom:var(--sab);
+    animation:sheetIn .28s cubic-bezier(.2,.9,.3,1);
+  }
+}
+.m-head{
+  display:flex; align-items:flex-start; gap:12px;
+  padding:20px 20px 14px;
+}
+.m-head .m-ico{
+  width:44px; height:44px; border-radius:13px; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center; font-size:21px;
+}
+.m-head .m-title-wrap{flex:1; min-width:0; padding-top:2px;}
+.m-head h2{font-size:18px; font-weight:800; margin:0; line-height:1.3; letter-spacing:-.3px;}
+.m-head .m-sub{font-size:12.5px; color:var(--muted); margin-top:3px; font-weight:500;}
+.m-close{
+  width:32px; height:32px; border-radius:9px; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  color:var(--muted); font-size:15px; transition:all .15s;
+}
+.m-close:hover{background:var(--surface-2); color:var(--text);}
+
+.m-body{padding:0 20px 4px;}
+.m-row{
+  display:flex; align-items:flex-start; gap:11px; padding:9px 0;
+  font-size:14px; color:var(--text); line-height:1.45;
+}
+.m-row .m-r-ico{width:19px; text-align:center; flex-shrink:0; opacity:.85; font-size:14px; padding-top:2px;}
+.m-row .m-r-text{flex:1; word-break:break-word;}
+.m-row .m-r-label{font-size:11.5px; color:var(--muted); font-weight:600; display:block; margin-bottom:1px;}
+.m-notes{
+  background:var(--surface-2); border-radius:var(--r-sm); padding:11px 13px;
+  font-size:13px; color:var(--text-2); line-height:1.55; margin-top:6px;
+  white-space:pre-wrap;
+}
+
+.m-actions{
+  display:flex; gap:9px; padding:16px 20px 20px;
+}
+.m-actions .btn{flex:1;}
+.m-actions .btn-icon-only{flex:0 0 auto; padding:11px 14px;}
+
+/* Form */
+.form-grid{display:flex; flex-direction:column; gap:13px; padding:0 20px;}
+.field{display:flex; flex-direction:column; gap:6px;}
+.field label{font-size:12px; font-weight:600; color:var(--muted);}
+.field input, .field select, .field textarea{
+  background:var(--surface-2); border:1px solid transparent; border-radius:var(--r-sm);
+  padding:12px 13px; font-size:15px; color:var(--text);
+  width:100%; transition:all .15s;
+}
+.field textarea{resize:none; min-height:64px; line-height:1.5;}
+.field input:focus, .field select:focus, .field textarea:focus{
+  outline:none; background:var(--surface);
+  border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft);
+}
+.field-row{display:flex; gap:11px;}
+.field-row .field{flex:1; min-width:0;}
+
+/* Quick add */
+.qa-wrap{padding:0 20px;}
+.qa-input{
+  width:100%; background:var(--surface-2); border:1px solid transparent;
+  border-radius:var(--r-md); padding:15px 16px; font-size:16px; color:var(--text);
+  resize:none; min-height:74px; line-height:1.5; transition:all .15s;
+}
+.qa-input:focus{outline:none; background:var(--surface); border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft);}
+.qa-input::placeholder{color:var(--muted);}
+.qa-chips{display:flex; flex-wrap:wrap; gap:7px; margin-top:12px;}
+.chip{
+  background:var(--surface-2); border:1px solid var(--border); color:var(--text-2);
+  padding:8px 13px; border-radius:100px; font-size:12.5px; font-weight:500;
+  transition:all .15s;
+}
+.chip:hover{background:var(--accent-soft); border-color:#DEDEFB; color:var(--accent);}
+.chip:active{transform:scale(.95);}
+
+.hint{
+  font-size:11.5px; color:var(--muted); margin-top:11px; line-height:1.6;
+}
+.hint b{color:var(--text-2); font-weight:600;}
+
+/* Settings */
+.settings-body{padding:0 20px 20px;}
+.settings-body p{font-size:12.5px; color:var(--muted); line-height:1.7; margin:0 0 14px;}
+.settings-body a{color:var(--accent); text-decoration:none; font-weight:600;}
+.settings-body a:hover{text-decoration:underline;}
+
+/* Spinner */
+.spinner{
+  width:15px; height:15px; border-radius:50%;
+  border:2px solid rgba(255,255,255,.35); border-top-color:#fff;
+  animation:spin .7s linear infinite;
+}
+.spinner.dark{border-color:rgba(91,91,245,.25); border-top-color:var(--accent);}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* Toast */
+.toast{
+  position:fixed; bottom:calc(var(--sab) + 24px); inset-inline-start:50%;
+  transform:translate(50%, 90px);
+  background:#1A1E2E; color:#fff; padding:12px 18px; border-radius:100px;
+  font-size:13px; font-weight:600; z-index:200;
+  box-shadow:0 14px 30px -8px rgba(17,20,32,.5);
+  display:flex; align-items:center; gap:8px;
+  transition:transform .3s cubic-bezier(.2,.9,.3,1), opacity .3s;
+  opacity:0; pointer-events:none; max-width:min(90vw,420px);
+}
+.toast.show{transform:translate(50%, 0); opacity:1;}
+.toast.ok{background:#0E7A5F;}
+.toast.err{background:#B91C1C;}
+
+/* Skeleton */
+.sk{background:linear-gradient(90deg,#EEF0F6 25%,#F6F7FB 50%,#EEF0F6 75%); background-size:200% 100%; animation:shimmer 1.3s infinite;}
+@keyframes shimmer{0%{background-position:200% 0;} 100%{background-position:-200% 0;}}
+
+/* Empty calendar state */
+.cal-empty{
+  position:absolute; inset:0; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:8px;
+  pointer-events:none; z-index:15; padding:30px;
+}
+.cal-empty .e{font-size:38px; opacity:.35;}
+.cal-empty .t{font-size:14px; font-weight:700; color:var(--text-2);}
+.cal-empty .s{font-size:12.5px; color:var(--muted); text-align:center; line-height:1.6;}
+
+/* Responsive */
+@media (max-width:899px){
+  .sidebar{display:none;}
+  .fab{display:flex;}
+  .topbar .btn-connect span.txt{display:none;}
+  .topbar .btn-connect{padding:9px 11px;}
+  .brand .txt{display:none;}
+  .range-label{font-size:15px;}
+  .toolbar{padding:10px 14px;}
+  .topbar{padding:12px 14px;}
+}
+@media (max-width:520px){
+  .view-switch button{padding:7px 11px; font-size:12px;}
+  .btn-today{padding:7px 11px; font-size:12.5px;}
+  .range-label{order:3; width:100%; flex-basis:100%; font-size:14.5px; margin-top:2px;}
+  .toolbar{gap:8px;}
+  .mcell{min-height:92px;}
+}
+.hide{display:none !important;}
+</style>
 </head>
 <body>
-<main class="app" id="app"></main>
-<button class="fab" data-act="new">+ יציאה</button>
-<div class="toast" id="toast" hidden></div>
+<div class="app">
 
-<script src="config.js"></script>
-<script src="script.js"></script>
-</body>
-</html>
+  <!-- ===== Topbar ===== -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">📅</span>
+      <span class="txt">Event Planner</span>
+    </div>
+    <div class="topbar-actions">
+      <button class="btn-connect" id="connectBtn" title="התחבר ליומן Google">
+        <span class="dot-live hide" id="connectDot"></span>
+        <span class="txt" id="connectTxt">התחבר ל-Google</span>
+      </button>
+      <button class="icon-btn" id="searchBtn" title="חיפוש">🔍</button>
+      <button class="icon-btn" id="settingsToggle" title="הגדרות">⚙️</button>
+      <button class="icon-btn" id="createBtnTop" title="אירוע חדש" style="background:var(--accent); color:#fff; border-color:var(--accent);">＋</button>
+    </div>
+  </header>
+
+  <!-- ===== Toolbar ===== -->
+  <div class="toolbar">
+    <div class="nav-group">
+      <button class="nav-btn" id="prevBtn" title="הקודם">‹</button>
+      <button class="btn-today" id="todayBtn">היום</button>
+      <button class="nav-btn" id="nextBtn" title="הבא">›</button>
+    </div>
+    <div class="range-label" id="rangeLabel">—</div>
+    <div class="view-switch" id="viewSwitch">
+      <button data-view="day">יום</button>
+      <button data-view="week" class="active">שבוע</button>
+      <button data-view="month">חודש</button>
+    </div>
+  </div>
+
+  <!-- ===== Search ===== -->
+  <div class="search-bar hide" id="searchBar">
+    <span style="color:var(--muted); font-size:14px;">🔍</span>
+    <input type="text" id="searchInput" placeholder="חיפוש לפי שם אירוע…" autocomplete="off">
+    <button class="icon-btn" id="searchClose" style="width:30px;height:30px;font-size:12px;">✕</button>
+  </div>
+  <div class="search-results hide" id="searchResults"></div>
+
+  <!-- ===== Layout ===== -->
+  <div class="layout">
+    <div class="main">
+      <div class="next-up hide" id="nextUp"></div>
+      <div class="calendar-container" id="calendarContainer"></div>
+    </div>
+    <aside class="sidebar">
+      <div class="sb-head">
+        <h2>בקרוב</h2>
+        <span class="sb-count" id="sbCount">0</span>
+      </div>
+      <div class="sb-body" id="sbBody"></div>
+    </aside>
+  </div>
+</div>
+
+<button class="fab" id="fab" title="אירוע חדש">＋</button>
+
+<div class="backdrop" id="backdrop"></div>
+
+<!-- ===== Event modal ===== -->
+<div class="modal" id="eventModal">
+  <div class="modal-card" id="eventModalCard"></div>
+</div>
+
+<!-- ===== Quick add modal ===== -->
+<div class="modal" id="quickAddModal">
+  <div class="modal-card">
+    <div class="m-head">
+      <div class="m-ico" style="background:var(--accent-soft);">✨</div>
+      <div class="m-title-wrap">
+        <h2>אירוע חדש</h2>
+        <div class="m-sub">כתוב בשפה חופשית ואני אבין</div>
+      </div>
+      <button class="m-close" data-close>✕</button>
+    </div>
+    <div class="qa-wrap">
+      <textarea class="qa-input" id="qaInput" placeholder="לדוגמה: סרט בקניון גי ביום חמישי 20:00"></textarea>
+      <div class="qa-chips">
+        <button class="chip" data-ex="סרט בקניון גי">🎬 סרט בקניון גי</button>
+        <button class="chip" data-ex="סלסה ביום שלישי 20:30">💃 סלסה שלישי 20:30</button>
+        <button class="chip" data-ex="ארוחה בתל אביב בערב">🍽️ ארוחה בת״א בערב</button>
+        <button class="chip" data-ex="Gym tomorrow 18:00">🏋️ Gym tomorrow 18:00</button>
+      </div>
+      <div class="hint">
+        <b>טיפים:</b> ״מחר״, ״יום חמישי״, ״20:00-22:00״, ״בערב״, ״בקניון גי״
+      </div>
+    </div>
+    <div class="m-actions">
+      <button class="btn btn-outline" data-close>ביטול</button>
+      <button class="btn btn-primary" id="qaSubmit">
+        <span class="spinner hide" id="qaSpinner"></span>
+        <span id="qaLabel">צור אירוע</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Settings modal ===== -->
+<div class="modal" id="settingsModal">
+  <div class="modal-card">
+    <div class="m-head">
+      <div class="m-ico" style="background:var(--surface-2);">⚙️</div>
+      <div class="m-title-wrap">
+        <h2>הגדרות</h2>
+        <div class="m-sub">חיבור ליומן Google</div>
+      </div>
+      <button class="m-close" data-close>✕</button>
+    </div>
+    <div class="settings-body">
+      <p>
+        כדי לסנכרן עם יומן Google צריך <b>OAuth Client ID</b> אישי (חינם, חד־פעמי).
+        פתח את <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console</a>,
+        צור <b>OAuth Client ID</b> מסוג <b>Web application</b>, והוסף את כתובת האתר כ־
+        <b>Authorized JavaScript origin</b>. לאחר מכן הדבק את ה־Client ID כאן.
+      </p>
+      <div class="field">
+        <label>Google Client ID</label>
+        <input type="text" id="clientIdInput" placeholder="xxxxx.apps.googleusercontent.com" autocomplete="off">
+      </div>
+      <button class="btn btn-primary" id="saveClientId" style="width:100%; margin-top:14px;">שמור והתחבר</button>
+      <button class="btn btn-ghost" id="disconnectBtn" style="width:100%; margin-top:9px;">התנתק מ-Google</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* =====================================================================
+   1. CONSTANTS
+   ===================================================================== */
+const CATS = [
+  {k:'friends', e:'🎉', l:'יציאה עם חברים', c:'#F59E0B', bg:'#FEF3C7', tx:'#8A4B04', words:['חברים','יציאה','friends']},
+  {k:'bar',     e:'🍻', l:'ברים / מסיבות', c:'#EC4899', bg:'#FCE7F3', tx:'#9D174D', words:['בר','מסיבה','פאב','שתייה','bar','party']},
+  {k:'beach',   e:'🏖️', l:'ים / בריכה',    c:'#06B6D4', bg:'#CFFAFE', tx:'#155E75', words:['ים','בריכה','חוף','beach']},
+  {k:'dance',   e:'💃', l:'סלסה / ריקודים', c:'#8B5CF6', bg:'#EDE9FE', tx:'#5B21B6', words:['סלסה','ריקוד','ריקודים','באצ׳טה','דאנס','dance','salsa']},
+  {k:'gym',     e:'🏋️', l:'חדר כושר',      c:'#10B981', bg:'#D1FAE5', tx:'#065F46', words:['כושר','ג׳ים','גים','אימון','gym','workout']},
+  {k:'trip',    e:'✈️', l:'טיולים',        c:'#3B82F6', bg:'#DBEAFE', tx:'#1E40AF', words:['טיול','טיסה','נסיעה','חופשה','trip','flight']},
+  {k:'games',   e:'🎮', l:'משחקים',        c:'#6366F1', bg:'#E0E7FF', tx:'#3730A3', words:['משחק','גיימינג','פלייסטיישן','משחקים','game','gaming']},
+  {k:'movie',   e:'🎬', l:'סרטים / בידור',  c:'#F43F5E', bg:'#FFE4E6', tx:'#9F1239', words:['סרט','קולנוע','הופעה','מופע','movie','cinema','film']},
+  {k:'family',  e:'👨‍👩‍👦', l:'משפחה',     c:'#14B8A6', bg:'#CCFBF1', tx:'#115E59', words:['משפחה','הורים','סבתא','סבא','family']},
+  {k:'date',    e:'❤️', l:'דייטים',        c:'#EF4444', bg:'#FEE2E2', tx:'#991B1B', words:['דייט','רומנטי','date']},
+  {k:'study',   e:'📚', l:'לימודים',       c:'#0EA5E9', bg:'#E0F2FE', tx:'#075985', words:['לימוד','לימודים','שיעור','בחינה','מבחן','קורס','study','class']},
+  {k:'work',    e:'💼', l:'עבודה',         c:'#64748B', bg:'#E5EAF1', tx:'#334155', words:['עבודה','פגישה','ישיבה','מייל','meeting','work','call']},
+  {k:'other',   e:'📌', l:'אחר',           c:'#94A3B8', bg:'#EEF1F6', tx:'#475569', words:[]}
+];
+const DAYS_HE = ['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
+const DAYS_EN = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+const HE_PREFIXES = ['ב','ל','מ','ו','ה','כ','ש'];
+const TIME_OF_DAY = {
+  'בבוקר':{h:9,m:0}, 'בצהריים':{h:13,m:0}, 'אחר הצהריים':{h:16,m:0},
+  'בערב':{h:19,m:0}, 'בלילה':{h:22,m:0},
+  'morning':{h:9,m:0}, 'noon':{h:13,m:0}, 'afternoon':{h:16,m:0},
+  'evening':{h:19,m:0}, 'night':{h:22,m:0}, 'tonight':{h:20,m:0}
+};
+const LOCAL_KEY = 'ep_local_events_v1';
+const CLIENT_KEY = 'gcal_client_id';
+const CONNECTED_KEY = 'gcal_connected';
+
+/* =====================================================================
+   2. UTILITIES
+   ===================================================================== */
+const pad = n => String(n).padStart(2,'0');
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const startOfDay = d => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+const addDays = (d,n) => { const x = new Date(d); x.setDate(x.getDate()+n); return x; };
+const addMonths = (d,n) => { const x = new Date(d); x.setMonth(x.getMonth()+n); return x; };
+const startOfWeek = d => addDays(startOfDay(d), -d.getDay());
+const startOfMonth = d => new Date(d.getFullYear(), d.getMonth(), 1);
+const endOfMonth = d => new Date(d.getFullYear(), d.getMonth()+1, 0);
+const sameDay = (a,b) => a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+const fmtTime = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const uid = () => 'e' + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+const catObj = k => CATS.find(c=>c.k===k) || CATS[CATS.length-1];
+
+function fmtDateFull(d){
+  return d.toLocaleDateString('he-IL', {weekday:'long', day:'numeric', month:'long', year:'numeric'});
+}
+function fmtDateShort(d){
+  return d.toLocaleDateString('he-IL', {weekday:'short', day:'numeric', month:'short'});
+}
+function timeUntil(date){
+  const diff = date - new Date();
+  if(diff <= 0) return 'עכשיו';
+  const mins = Math.round(diff/60000);
+  if(mins < 1) return 'בעוד פחות מדקה';
+  if(mins < 60) return `בעוד ${mins} דק׳`;
+  const h = Math.floor(mins/60), m = mins%60;
+  if(h < 24) return `בעוד ${h} שע׳${m ? ' ו־'+m+' דק׳' : ''}`;
+  const days = Math.floor(h/24);
+  if(days === 1) return 'בעוד יום';
+  return `בעוד ${days} ימים`;
+}
+
+/* =====================================================================
+   3. QUICK-ADD PARSER (Hebrew + English)
+   ===================================================================== */
+function tokenCandidates(token){
+  const forms = new Set([token]);
+  if(/^[א-ת]/.test(token) && token.length > 1 && HE_PREFIXES.includes(token[0])){
+    forms.add(token.slice(1));
+    if(token.length > 2 && HE_PREFIXES.includes(token[1])) forms.add(token.slice(2));
+  }
+  return forms;
+}
+
+function detectCategory(text){
+  const tokens = text.toLowerCase().split(/[^a-zא-ת]+/).filter(Boolean);
+  const forms = new Set();
+  tokens.forEach(t => tokenCandidates(t).forEach(f => forms.add(f)));
+  for(const c of CATS){
+    if(c.k === 'other' || c.k === 'friends') continue;
+    if(c.words.some(w => forms.has(w.toLowerCase()))) return c.k;
+  }
+  const fr = CATS.find(c=>c.k==='friends');
+  if(fr.words.some(w => forms.has(w.toLowerCase()))) return 'friends';
+  return 'other';
+}
+
+function parseTimeToken(s){
+  if(!s) return null;
+  s = String(s).trim().toLowerCase();
+  const half = /וחצי/.test(s);
+  const m = s.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
+  if(!m) return null;
+  let h = +m[1], min = m[2] ? +m[2] : (half ? 30 : 0);
+  const ap = m[3];
+  if(ap === 'pm' && h < 12) h += 12;
+  if(ap === 'am' && h === 12) h = 0;
+  if(h > 23 || min > 59) return null;
+  return {h, m:min};
+}
+
+const T_TOKEN = '(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?|\\d{1,2}\\s*וחצי)';
+
+function mkDateFromMatch(m, fallbackYear){
+  const day = +m[1], mon = +m[2] - 1;
+  const yr = m[3] ? (m[3].length === 2 ? 2000 + +m[3] : +m[3]) : fallbackYear;
+  return new Date(yr, mon, day);
+}
+
+function parseQuick(raw, baseDate){
+  const base = baseDate ? new Date(baseDate) : new Date();
+  const today = startOfDay(base);
+  const lower = raw.toLowerCase();
+  const cat = detectCategory(raw);
+  const strs = [];
+
+  /* ---------- DATE ---------- */
+  let dateStart = null, dateEnd = null, multiDay = false;
+
+  const dm = [...raw.matchAll(/(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?/g)];
+  if(dm.length >= 2){
+    dateStart = mkDateFromMatch(dm[0], today.getFullYear());
+    dateEnd = mkDateFromMatch(dm[1], today.getFullYear());
+    multiDay = true;
+    strs.push(dm[0][0], dm[1][0]);
+  } else if(dm.length === 1){
+    dateStart = mkDateFromMatch(dm[0], today.getFullYear());
+    strs.push(dm[0][0]);
+  }
+
+  if(!dateStart){
+    if(raw.includes('מחרתיים')){ dateStart = addDays(today,2); strs.push('מחרתיים'); }
+    else if(raw.includes('מחר')){ dateStart = addDays(today,1); strs.push('מחר'); }
+    else if(raw.includes('היום')){ dateStart = today; strs.push('היום'); }
+  }
+  if(!dateStart){
+    if(/\btomorrow\b/.test(lower)){ dateStart = addDays(today,1); strs.push('tomorrow'); }
+    else if(/\btonight\b/.test(lower)){ dateStart = today; strs.push('tonight'); }
+    else if(/\btoday\b/.test(lower)){ dateStart = today; strs.push('today'); }
+  }
+  if(!dateStart){
+    for(let i=0;i<7;i++){
+      const re = new RegExp('(?:ב)?(?:יום\\s*)?' + DAYS_HE[i]);
+      const m = raw.match(re);
+      if(m){
+        let diff = (i - today.getDay() + 7) % 7;
+        if(diff === 0 && /הבא/.test(raw)) diff = 7;
+        dateStart = addDays(today, diff);
+        strs.push(m[0]);
+        break;
+      }
+    }
+  }
+  if(!dateStart){
+    for(let i=0;i<7;i++){
+      const re = new RegExp('\\b(next\\s+)?' + DAYS_EN[i] + '\\b');
+      const m = lower.match(re);
+      if(m){
+        let diff = (i - today.getDay() + 7) % 7;
+        if(m[1]) diff = diff === 0 ? 7 : diff + 7;
+        else if(diff === 0) diff = 7;
+        dateStart = addDays(today, diff);
+        strs.push(m[0]);
+        break;
+      }
+    }
+  }
+  if(!dateStart) dateStart = today;
+
+  /* ---------- TIMES ---------- */
+  let startT = null, endT = null;
+
+  const rangeRe = new RegExp(
+    '(?:בין|מ-?|משעה|from)?\\s*' + T_TOKEN + '\\s*(?:-|–|—|עד|until|till|to|ל-?)\\s*' + T_TOKEN,
+    'i'
+  );
+  const rm = raw.match(rangeRe);
+  if(rm){
+    const a = parseTimeToken(rm[1]), b = parseTimeToken(rm[2]);
+    if(a && b){ startT = a; endT = b; strs.push(rm[0]); }
+  }
+
+  if(!startT){
+    const singleRe = new RegExp('(?:ב-?|בשעה|at|@)\\s*' + T_TOKEN, 'i');
+    const sm = raw.match(singleRe);
+    if(sm){
+      const a = parseTimeToken(sm[1]);
+      if(a){ startT = a; strs.push(sm[0]); }
+    }
+  }
+  if(!startT){
+    const plain = raw.match(/\b(\d{1,2}:\d{2})\b/);
+    if(plain){
+      const a = parseTimeToken(plain[1]);
+      if(a){ startT = a; strs.push(plain[0]); }
+    }
+  }
+
+  if(!startT){
+    for(const w in TIME_OF_DAY){
+      if(lower.includes(w)){
+        startT = TIME_OF_DAY[w];
+        strs.push(w);
+        break;
+      }
+    }
+  }
+
+  /* ---------- CLEAN TITLE / LOCATION ---------- */
+  let clean = raw;
+  strs.forEach(s => { if(s) clean = clean.split(s).join(' '); });
+
+  const stop = new Set([
+    'בין','מ-','משעה','עד','ל-','היום','מחר','מחרתיים','הבא','ב-','בשעה',
+    'התחלה','סיום','-','–','—','from','to','until','till','at','on','next',
+    'ב','ל','מ','ה','ו','כ','ש'
+  ]);
+  clean = clean.split(/\s+/).filter(w => w && !stop.has(w)).join(' ').trim();
+
+  const catWords = new Set(CATS.flatMap(c => c.words.map(w => w.toLowerCase())));
+  let title = clean, location = '';
+
+  const atMatch = clean.match(/^(.*?)\s+at\s+(.+)$/i);
+  if(atMatch && atMatch[1].trim()){
+    title = atMatch[1].trim();
+    location = atMatch[2].trim();
+  } else {
+    const words = clean.split(/\s+/).filter(Boolean);
+    for(let i=1;i<words.length;i++){
+      const w = words[i];
+      if(w[0] === 'ב' && w.length > 1 && !catWords.has(w) && !catWords.has(w.slice(1))){
+        title = words.slice(0,i).join(' ').trim();
+        location = (w.slice(1) + ' ' + words.slice(i+1).join(' ')).trim();
+        break;
+      }
+    }
+  }
+  title = title.replace(/^(ל|אל|את)\s+/, '').trim();
+
+  /* ---------- BUILD DATES ---------- */
+  const sh = startT ? startT.h : 19;
+  const sm = startT ? startT.m : 0;
+  let eh, em;
+  if(endT){ eh = endT.h; em = endT.m; }
+  else { eh = (sh + 1) % 24; em = sm; }
+
+  const sd = new Date(dateStart); sd.setHours(sh, sm, 0, 0);
+  const endBase = (multiDay && dateEnd) ? dateEnd : dateStart;
+  const ed = new Date(endBase); ed.setHours(eh, em, 0, 0);
+
+  let overnight = false;
+  if(!multiDay && ed <= sd){ ed.setDate(ed.getDate() + 1); overnight = true; }
+  const isMultiDay = sd.toDateString() !== ed.toDateString();
+
+  return {
+    title: title || 'אירוע חדש',
+    location,
+    cat,
+    start: sd,
+    end: ed,
+    notes: '',
+    overnight,
+    multiDay: isMultiDay
+  };
+}
+
+/* =====================================================================
+   4. STATE
+   ===================================================================== */
+const state = {
+  view: 'week',
+  cursor: new Date(),
+  events: [],
+  selectedId: null,
+  editingId: null,
+  authed: false,
+  loading: false,
+  query: ''
+};
+
+/* ---------- Local storage ---------- */
+function loadLocal(){
+  try{
+    const raw = localStorage.getItem(LOCAL_KEY);
+    if(!raw) return [];
+    return JSON.parse(raw).map(e => ({
+      ...e,
+      start: new Date(e.start),
+      end: new Date(e.end),
+      source: 'local'
+    }));
+  }catch(e){ return []; }
+}
+function saveLocal(events){
+  const serial = events.filter(e => e.source === 'local').map(e => ({
+    id:e.id, title:e.title, location:e.location, notes:e.notes,
+    cat:e.cat, start:e.start.toISOString(), end:e.end.toISOString()
+  }));
+  localStorage.setItem(LOCAL_KEY, JSON.stringify(serial));
+}
+
+function seedIfEmpty(){
+  if(localStorage.getItem('ep_seeded')) return;
+  localStorage.setItem('ep_seeded','1');
+  if(localStorage.getItem(CLIENT_KEY)) return;
+  const today = startOfDay(new Date());
+  const mk = (off, sh, sm, eh, em, title, cat, loc) => {
+    const s = addDays(today, off); s.setHours(sh, sm, 0, 0);
+    const e = addDays(today, off); e.setHours(eh, em, 0, 0);
+    return { id: uid(), title, cat, location: loc || '', notes:'', start:s, end:e, source:'local' };
+  };
+  const seed = [
+    mk(0,  8, 30,  9, 30, 'אימון כושר', 'gym', 'חדר כושר'),
+    mk(0, 19,  0, 21,  0, 'ארוחת ערב עם דנה', 'friends', 'טאיזו, תל אביב'),
+    mk(1, 18,  0, 19,  0, 'סלסה למתחילים', 'dance', 'סטודיו מרכז'),
+    mk(2, 20, 30, 23,  0, 'סרט ופיצה', 'movie', 'קניון גי'),
+    mk(3,  9,  0, 10,  0, 'פגישת צוות', 'work', 'זום'),
+    mk(5, 11,  0, 15,  0, 'יום כיף בים', 'beach', 'חוף גורדון')
+  ];
+  saveLocal(seed);
+}
+
+/* =====================================================================
+   5. GOOGLE CALENDAR
+   ===================================================================== */
+let tokenClient = null;
+let accessToken = null;
+const getClientId = () => localStorage.getItem(CLIENT_KEY) || '';
+
+function initGIS(){
+  const cid = getClientId();
+  if(!cid || !window.google?.accounts?.oauth2) return false;
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: cid,
+    scope: 'https://www.googleapis.com/auth/calendar.events',
+    callback: () => {}
+  });
+  return true;
+}
+
+function ensureToken(forceConsent){
+  return new Promise((resolve, reject) => {
+    const cid = getClientId();
+    if(!cid) return reject({code:'no-client-id'});
+    if(!tokenClient && !initGIS()) return reject({code:'gis-not-ready'});
+    tokenClient.callback = (resp) => {
+      if(resp.error){
+        if(!forceConsent && resp.error !== 'interaction_required'){
+          ensureToken(true).then(resolve).catch(reject);
+        } else reject(resp);
+        return;
+      }
+      accessToken = resp.access_token;
+      localStorage.setItem(CONNECTED_KEY,'1');
+      resolve(accessToken);
+    };
+    try{
+      tokenClient.requestAccessToken({ prompt: forceConsent ? 'consent' : '' });
+    }catch(e){ reject(e); }
+  });
+}
+
+async function gFetch(url, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({
+    'Authorization': 'Bearer ' + accessToken
+  }, opts.headers || {});
+  const res = await fetch(url, opts);
+  if(res.status === 401){
+    accessToken = null;
+    state.authed = false;
+    updateConnectUI();
+  }
+  return res;
+}
+
+function toEvent(g){
+  const startRaw = g.start.dateTime || (g.start.date + 'T00:00:00');
+  const endRaw   = g.end.dateTime   || (g.end.date   + 'T00:00:00');
+  return {
+    id: 'g_' + g.id,
+    gid: g.id,
+    title: g.summary || '(ללא שם)',
+    location: g.location || '',
+    notes: (g.description || '').replace(/^[^\s]+\s[^\s]+\s—\s/, ''),
+    cat: g.extendedProperties?.private?.cat || 'other',
+    start: new Date(startRaw),
+    end: new Date(endRaw),
+    source: 'google'
+  };
+}
+
+async function fetchGoogleEvents(rangeStart, rangeEnd){
+  if(!accessToken) return [];
+  const params = new URLSearchParams({
+    timeMin: rangeStart.toISOString(),
+    timeMax: rangeEnd.toISOString(),
+    singleEvents: 'true',
+    orderBy: 'startTime',
+    maxResults: '250'
+  });
+  const res = await gFetch('https://www.googleapis.com/calendar/v3/calendars/primary/events?' + params);
+  if(!res.ok) throw new Error('fetch-failed');
+  const data = await res.json();
+  return (data.items || []).filter(i => i.status !== 'cancelled').map(toEvent);
+}
+
+async function pushEvent(ev){
+  const c = catObj(ev.cat);
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const iso = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
+  const body = {
+    summary: ev.title,
+    location: ev.location || undefined,
+    description: (ev.notes ? ev.notes + '\n' : '') + `${c.e} ${c.l}`,
+    start: { dateTime: iso(ev.start), timeZone: tz },
+    end:   { dateTime: iso(ev.end),   timeZone: tz },
+    extendedProperties: { private: { cat: ev.cat } }
+  };
+  const res = await gFetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if(!res.ok) throw new Error('push-failed');
+  return toEvent(await res.json());
+}
+
+async function patchEvent(ev){
+  const c = catObj(ev.cat);
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const iso = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
+  const body = {
+    summary: ev.title,
+    location: ev.location || '',
+    description: (ev.notes ? ev.notes + '\n' : '') + `${c.e} ${c.l}`,
+    start: { dateTime: iso(ev.start), timeZone: tz },
+    end:   { dateTime: iso(ev.end),   timeZone: tz },
+    extendedProperties: { private: { cat: ev.cat } }
+  };
+  const res = await gFetch('https://www.googleapis.com/calendar/v3/calendars/primary/events/' + ev.gid, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if(!res.ok) throw new Error('patch-failed');
+  return toEvent(await res.json());
+}
+
+async function deleteGoogleEvent(gid){
+  const res = await gFetch('https://www.googleapis.com/calendar/v3/calendars/primary/events/' + gid, {
+    method: 'DELETE'
+  });
+  if(!res.ok && res.status !== 410) throw new Error('delete-failed');
+}
+
+/* =====================================================================
+   6. VIEW RANGE
+   ===================================================================== */
+function visibleRange(){
+  const c = state.cursor;
+  if(state.view === 'day'){
+    const s = startOfDay(c);
+    return { start: s, end: addDays(s, 1) };
+  }
+  if(state.view === 'week'){
+    const s = startOfWeek(c);
+    return { start: s, end: addDays(s, 7) };
+  }
+  const first = startOfMonth(c);
+  const gridStart = startOfWeek(first);
+  return { start: gridStart, end: addDays(gridStart, 42) };
+}
+
+function eventsInRange(){
+  return state.events;
+}
+
+/* =====================================================================
+   7. RENDERING
+   ===================================================================== */
+function render(){
+  renderRangeLabel();
+  renderViewSwitch();
+  const container = document.getElementById('calendarContainer');
+  if(state.view === 'month'){
+    container.innerHTML = renderMonth();
+    bindMonthEvents();
+  } else {
+    const days = state.view === 'day'
+      ? [startOfDay(state.cursor)]
+      : Array.from({length:7}, (_,i) => addDays(startOfWeek(state.cursor), i));
+    container.innerHTML = renderTimeGrid(days);
+    bindGridEvents(container);
+    scrollToRe
