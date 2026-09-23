@@ -1,3 +1,4 @@
+// script.js
 (function(){
 'use strict';
 
@@ -12,7 +13,7 @@ const TRANSPORT={
   taxi:{e:'🚕',t:'מונית'},walk:{e:'🚶',t:'הליכה'},unknown:{e:'❓',t:'לא ידוע'}
 };
 const DAYS=['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
-const PAST_AFTER=3*3600e3; // an outing moves to "past" 3 hours after it starts
+const PAST_AFTER=3*3600e3;
 
 /* ---------- helpers ---------- */
 const $=s=>document.querySelector(s);
@@ -46,9 +47,6 @@ function toast(msg){
   clearTimeout(toastTimer);toastTimer=setTimeout(()=>{t.hidden=true},2600);
 }
 
-/* ---------- ride rules (same rules as the database, see supabase-migration-v4.sql) ----------
-   In one outing a person is exactly one of: driver / passenger in one car / no car.
-   Only someone marked "going" can be in a car. */
 function rideRole(ev,name){
   if(!ev||!name)return null;
   const own=ev.rides.find(r=>r.driver===name);
@@ -57,11 +55,10 @@ function rideRole(ev,name){
   if(seat)return{type:'passenger',ride:seat};
   return null;
 }
-// Mutates an event object (from either store) after `name` changed their RSVP to `st`
 function applyRsvpToRides(rides,name,st){
   if(st==='yes'||!Array.isArray(rides))return rides;
-  const out=rides.filter(r=>r.driver!==name);                    // a driver who isn't coming: the car is gone
-  out.forEach(r=>{r.passengers=r.passengers.filter(p=>p!==name)}); // a passenger who isn't coming: out of the car
+  const out=rides.filter(r=>r.driver!==name);
+  out.forEach(r=>{r.passengers=r.passengers.filter(p=>p!==name)});
   return out;
 }
 const RIDE_ERR={
@@ -75,7 +72,7 @@ const RIDE_ERR={
   YZ_SEATS_TAKEN:'יש ברכב יותר נוסעים ממספר המקומות'
 };
 
-/* ---------- identity: just a name, kept in localStorage ---------- */
+/* ---------- identity ---------- */
 let me=null;
 try{const m=JSON.parse(LS.get('yotz.me')||'null');if(m&&m.name)me={id:m.name,name:m.name}}catch(e){}
 const myId=()=>me?me.id:null;
@@ -83,7 +80,6 @@ const myId=()=>me?me.id:null;
 /* ---------- state ---------- */
 const state={people:[],events:[],ready:false,mode:null,err:false};
 let store=null;
-// a link from a calendar event (?event=123) opens that outing once the board has loaded and a name is set
 let pendingEventId=null;
 try{pendingEventId=new URLSearchParams(location.search).get('event')||null}catch(e){}
 function clearDeepLink(){
@@ -93,7 +89,6 @@ function clearDeepLink(){
 function maybeOpenDeepLink(){
   if(!pendingEventId||!me||sheetEl)return;
   if(!state.events.some(e=>e.id===pendingEventId)){
-    // only give up after the server answered (the cached board may simply be older than the link)
     if(state.fresh){clearDeepLink();toast('היציאה הזו כבר לא קיימת')}
     return;
   }
@@ -117,7 +112,6 @@ function setEvents(o,fresh){
       description:String(v.description||'').slice(0,500),by:v.by?String(v.by):null,
       rsvps:rs,rides};
   }).filter(e=>e.when);
-  // the group = everyone who has answered at least one outing
   const names=new Set();
   state.events.forEach(e=>{for(const n in e.rsvps)names.add(n)});
   state.people=[...names].sort((a,b)=>a.localeCompare(b,'he')).map(n=>({id:n,name:n}));
@@ -126,7 +120,7 @@ function setEvents(o,fresh){
   render();refreshSheet();paintInvite();maybeOpenDeepLink();
 }
 
-/* ---------- writes: one at a time ---------- */
+/* ---------- writes ---------- */
 let chain=Promise.resolve();
 function enqueue(fn){const p=chain.then(fn);chain=p.catch(()=>{});return p}
 function writeFail(e){
@@ -139,13 +133,11 @@ function writeFail(e){
 }
 
 /* ---------- storage ---------- */
-// The database uses: events(title,type,location,date,time,transport) and participants(event_id,name,status)
 const STATUS_OUT={yes:'going',maybe:'maybe',no:'not_going'};
 const STATUS_IN={going:'yes',maybe:'maybe',not_going:'no'};
 const kindFromLabel=t=>Object.keys(KINDS).find(k=>KINDS[k].t===t)||'other';
 const trFromLabel=t=>Object.keys(TRANSPORT).find(k=>TRANSPORT[k].t===t)||'unknown';
 
-// Fallback when config.js is empty: everything stays on this device (for trying the UI in a browser)
 function makeLocal(){
   let data={events:{}};
   try{const s=LS.get('yotz.local.v3');if(s)data=JSON.parse(s)}catch(e){}
@@ -180,7 +172,7 @@ function makeLocal(){
         if(!sw)throw rule('YZ_ALREADY_PASSENGER');
         rs.forEach(r=>{r.passengers=r.passengers.filter(p=>p!==driver)});
       }
-      data.events[eventId].rsvps[driver]='yes';   // driving means you're coming
+      data.events[eventId].rsvps[driver]='yes';
       rs.push({id:rid('r'),driver,seats:Math.max(0,Math.min(20,Number(seats)||0)),pickup:pickup||'',note:note||'',passengers:[]});
       save();emit();
     },
@@ -192,9 +184,9 @@ function makeLocal(){
       if(ride.passengers.length>=ride.seats)throw rule('YZ_RIDE_FULL');
       if(rs.some(r=>r.driver===name)){
         if(!sw)throw rule('YZ_ALREADY_DRIVER');
-        rs=data.events[eventId].rides=rs.filter(r=>r.driver!==name);   // their own car (and its passengers' seats) is gone
+        rs=data.events[eventId].rides=rs.filter(r=>r.driver!==name);
       }
-      data.events[eventId].rsvps[name]='yes';     // needing a ride means you're coming
+      data.events[eventId].rsvps[name]='yes';
       rs.forEach(r=>{r.passengers=r.passengers.filter(p=>p!==name)});
       ride.passengers.push(name);
       save();emit();
@@ -208,14 +200,15 @@ function makeLocal(){
       const rs=ridesOf(eventId);if(!rs)return;
       const i=rs.findIndex(r=>r.id===rideId&&r.driver===driver);if(i>=0)rs.splice(i,1);
       save();emit();
-    }
+    },
+    async rateOuting(id, name, rating, feedback){}
   };
 }
 
 function makeSupabase(url,key){
   url=url.replace(/\/+$/,'');
   const H={apikey:key,'Content-Type':'application/json'};
-  if(key.indexOf('eyJ')===0)H.Authorization='Bearer '+key;   // legacy JWT-style anon key
+  if(key.indexOf('eyJ')===0)H.Authorization='Bearer '+key;
   const UP='resolution=merge-duplicates,return=minimal';
   async function api(method,path,body,prefer){
     const headers=Object.assign({},H);if(prefer)headers.Prefer=prefer;
@@ -223,7 +216,6 @@ function makeSupabase(url,key){
     if(!r.ok){
       const e=new Error('http '+r.status);
       e.code=(r.status===401||r.status===403)?'forbidden':r.status===409?'conflict':'unavailable';
-      // rule violations raised by the database (YZ_…) come back as the error message
       try{const j=await r.json();if(j&&j.message){e.msg=String(j.message);if(RIDE_ERR[e.msg])e.code='rule'}}catch(_){}
       throw e;
     }
@@ -288,15 +280,12 @@ function makeSupabase(url,key){
       if('description' in patch)body.description=patch.description||null;
       return api('PATCH','events?id=eq.'+encodeURIComponent(id),body,'return=minimal');
     }),
-    // Not "going" anymore → the database trigger takes them out of any car (and removes their own car).
-    // The same thing is applied to the screen right away so it never shows a seat that no longer exists.
     setRsvp:(id,name,st)=>write(()=>{if(cache[id]){cache[id].rsvps[name]=st;cache[id].rides=applyRsvpToRides(cache[id].rides,name,st)}},
       ()=>api('POST','participants?on_conflict=event_id,name',[{event_id:Number(id),name,status:STATUS_OUT[st]}],UP)),
     deleteEvent:id=>write(()=>{delete cache[id]},
       ()=>api('DELETE','events?id=eq.'+encodeURIComponent(id))),
     renamePerson:(from,to)=>write(null,
       ()=>api('PATCH','participants?name=eq.'+encodeURIComponent(from),{name:to},'return=minimal')),
-    // sw=true: "switch" (leave the car I'm in and drive / drop my car and ride with someone). Atomic in the database.
     createRide:(eventId,driver,seats,pickup,note,sw)=>write(null,async()=>{
       try{await api('POST','rpc/create_ride',{p_event_id:Number(eventId),p_driver:driver,p_seats:seats,p_pickup:pickup||'',p_note:note||'',p_switch:!!sw})}
       catch(e){if(e.code==='conflict')e.userMsg='כבר יש לך רכב ביציאה הזו';throw e}
@@ -313,7 +302,9 @@ function makeSupabase(url,key){
     leaveRide:(eventId,rideId,name)=>write(()=>{const r=findRide(eventId,rideId);if(r)r.passengers=r.passengers.filter(p=>p!==name)},
       ()=>api('POST','rpc/leave_ride',{p_ride_id:Number(rideId),p_passenger:name})),
     deleteRide:(eventId,rideId,driver)=>write(()=>{const e=cache[eventId];if(e)e.rides=e.rides.filter(r=>String(r.id)!==String(rideId))},
-      ()=>api('DELETE','rides?id=eq.'+encodeURIComponent(rideId)+'&driver_name=eq.'+encodeURIComponent(driver)))
+      ()=>api('DELETE','rides?id=eq.'+encodeURIComponent(rideId)+'&driver_name=eq.'+encodeURIComponent(driver))),
+    rateOuting:(id, name, rating, feedback)=>write(null, 
+      ()=>api('POST', 'outing_ratings?on_conflict=event_id,user_name', [{event_id: Number(id), user_name: name, rating: Number(rating), feedback: feedback||null}], 'resolution=merge-duplicates'))
   };
 }
 async function makeStore(){
@@ -326,20 +317,17 @@ async function makeStore(){
 const UA=navigator.userAgent||'';
 const IS_IPAD=/iPad/.test(UA)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 const IS_IOS=/iPhone|iPod/.test(UA)||IS_IPAD;
-const IS_NATIVE=!!window.Capacitor;   // inside the Capacitor app: no install UI at all
+const IS_NATIVE=!!window.Capacitor;
 const IS_STANDALONE=navigator.standalone===true||!!(window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches);
-// Real Safari, not Chrome/Firefox/Edge on iOS and not the in-app browsers of Facebook, Instagram etc.
 const IS_SAFARI=IS_IOS&&/Safari/.test(UA)&&!/CriOS|FxiOS|EdgiOS|OPiOS|OPT\/|GSA\/|FBAN|FBAV|FB_IAB|Instagram|Line\/|Twitter|MicroMessenger|TikTok|Bytedance|musical_ly|Snapchat|Telegram/.test(UA);
 const SAFARI_VER=Number((UA.match(/Version\/(\d+)/)||[0,0])[1]);
 const IS_ANDROID=/Android/.test(UA);
 const IS_MOBILE=IS_IOS||IS_ANDROID;
-// Facebook/Instagram/WhatsApp-style in-app browsers on Android can't install anything
 const IS_ANDROID_INAPP=IS_ANDROID&&/; wv\)|FBAN|FBAV|Instagram|Line\/|Twitter|MicroMessenger|TikTok|Bytedance|Snapchat|Telegram/.test(UA);
 const IS_SAMSUNG=IS_ANDROID&&/SamsungBrowser/.test(UA);
 const IS_FIREFOX_ANDROID=IS_ANDROID&&/Firefox/.test(UA);
-// iPhone/iPad: "add to home screen" (manual). Android/desktop: "install app" (native prompt when the browser offers it).
 const installLabel=()=>IS_IOS?'📱 הוסף את יוצאים למסך הבית':'📲 התקן את יוצאים כאפליקציה';
-let deferredPrompt=null;                       // Android / desktop Chrome & Edge native install prompt
+let deferredPrompt=null;
 let installed=LS.get('yotz.installed')==='1';
 const canShowInstall=()=>!IS_NATIVE&&!IS_STANDALONE;
 
@@ -353,12 +341,12 @@ function installUI(){
 }
 function markInstalled(){installed=true;LS.set('yotz.installed','1');render()}
 async function doInstall(){
-  if(deferredPrompt){                          // built-in prompt (Android / desktop)
+  if(deferredPrompt){
     const p=deferredPrompt;deferredPrompt=null;
     try{p.prompt();const r=await p.userChoice;if(r&&r.outcome==='accepted')markInstalled()}catch(e){}
     render();return;
   }
-  if(IS_MOBILE)openGuide();                    // no built-in prompt available (always the case on iOS): show the guide
+  if(IS_MOBILE)openGuide();
 }
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;render()});
 window.addEventListener('appinstalled',()=>{deferredPrompt=null;markInstalled()});
@@ -448,7 +436,6 @@ async function copyLink(){
   catch(e){toast('לא הצלחנו להעתיק. לחצו והחזיקו על הכתובת')}
 }
 
-// First visit on a phone: offer the install BEFORE asking for a name
 const shouldOnboard=()=>IS_MOBILE&&canShowInstall()&&!installed&&LS.get('yotz.ob')!=='1';
 function showOnboarding(){
   LS.set('yotz.ob','1');
@@ -495,15 +482,39 @@ function hero(ev){
 function card(ev){
   const k=KINDS[ev.kind],g=groups(ev),my=ev.rsvps[myId()],id=esc(ev.id);
   const pill=my==='maybe'||my==='no'?`<span class="mine ${my}">${my==='maybe'?'🟡 אולי':'🔴 לא מגיע'}</span>`:'';
+  
+  const d=new Date(ev.when);
+  const diff=Math.round((sod(d)-sod(new Date()))/864e5);
+  let relBadge='';
+  if(diff>1)relBadge=`<span class="crel">בעוד ${diff} ימים</span>`;
+  else if(diff===1)relBadge=`<span class="crel">מחר</span>`;
+  else if(diff===0)relBadge=`<span class="crel today">היום</span>`;
+
   const sub=whenLabel(ev.when)+(trText(ev)?' · '+trText(ev):'');
   const action=my==='yes'
     ?`<button class="cbtn done" data-act="open" data-id="${id}">✓ אתה מגיע</button>`
     :`<button class="cbtn" data-act="rsvp" data-id="${id}" data-s="yes">אני מגיע</button>`;
+    
+  const goingNames = g.yes.length
+    ? `<div class="c-names">${g.yes.map(p=>`<span class="nm-sm${me&&p.id===me.id?' me':''}">${esc(p.name)}</span>`).join('')}</div>`
+    : `<div class="c-none">עוד אף אחד לא אישר. תהיו הראשונים.</div>`;
+
   return `<article class="card" style="--h:${k.h}">
     <div class="info" data-act="open" data-id="${id}" role="button" tabindex="0">
-      <div class="crow"><span class="tile">${k.e}</span>
-        <div class="ctxt"><div class="cplace">${esc(ev.place)}</div><div class="cwhen">${sub}</div></div>${pill}</div>
-      <div class="ccnts">${cn(g)}</div>
+      <div class="crow">
+        <span class="tile">${k.e}</span>
+        <div class="ctxt">
+          <div class="cplace-wrap">
+            <div class="cplace">${esc(ev.place)}</div>
+            ${pill}
+          </div>
+          <div class="cwhen">${sub} ${relBadge}</div>
+        </div>
+      </div>
+      <div class="c-going">
+        <div class="ccnts">${cn(g)}</div>
+        ${goingNames}
+      </div>
     </div>${action}</article>`;
 }
 function prow(ev){
@@ -511,7 +522,9 @@ function prow(ev){
   return `<button class="prow" data-act="open" data-id="${esc(ev.id)}"><span class="pt">${k.e} ${esc(ev.place)} — ${ddmm(new Date(ev.when))}</span><span class="pc">${g.yes.length} הגיעו</span></button>`;
 }
 const head=()=>'<header class="top"><h1 class="brand">יוצאים?</h1>'+
-  (me?`<button class="who" data-act="rename" aria-label="שינוי שם">👤 ${esc(me.name)}</button>`:'')+'</header>';
+  '<div style="display:flex;gap:8px">'+
+  '<button class="ai-fab" data-act="open-ai">✨ רעיונות</button>'+
+  (me?`<button class="who" data-act="rename" aria-label="שינוי שם">👤 ${esc(me.name)}</button>`:'')+'</div></header>';
 
 function render(){
   const app=$('#app');if(!app)return;
@@ -561,18 +574,17 @@ function grp(cls,emoji,label,list){
     :'<span class="dash">—</span>';
   return `<div class="grp"><div class="gh">${emoji} ${label} <span class="n">${list.length}</span></div><div class="pills">${pills}</div></div>`;
 }
-/* ---------- share: the main way new people get in ---------- */
+
+/* ---------- share ---------- */
 const SHARE_ICON='<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 14V3"/><path d="M7.5 7.5L12 3l4.5 4.5"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>';
 const shareBtn=ev=>`<button class="sharebtn" data-act="share" data-id="${esc(ev.id)}">${SHARE_ICON}<span>שתפו את היציאה</span></button>`;
 
-// Base address of the site (config SHARE_URL wins, so links from the app/localhost still point at the real site)
 function siteUrl(){
   const c=window.APP_CONFIG&&window.APP_CONFIG.SHARE_URL;
   if(c)return c;
   if(IS_NATIVE||!/^https?:$/.test(location.protocol))return '';
   return location.origin+location.pathname;
 }
-// Direct link to one outing: opens the site straight on it
 function eventUrl(id){
   const base=siteUrl();if(!base)return '';
   try{const u=new URL(base,location.href);u.search='';u.hash='';u.searchParams.set('event',id);return u.toString()}
@@ -588,7 +600,6 @@ const CTAS=['מי מצטרף? 👀','מי בא? 🙌','מי איתנו? 😎','�
 function listNames(ns){return ns.length<2?ns.join(''):ns.slice(0,-1).join(', ')+' ו'+ns[ns.length-1]}
 function hashOf(s){let h=0;for(const c of String(s))h=(h*31+c.charCodeAt(0))|0;return Math.abs(h)}
 
-// A short, friendly message built from the outing's real details (never claims people who aren't there)
 function shareText(ev){
   const k=KINDS[ev.kind],d=new Date(ev.when),g=groups(ev);
   const diff=Math.round((sod(d)-sod(new Date()))/864e5),evening=d.getHours()>=17||d.getHours()<4;
@@ -599,7 +610,6 @@ function shareText(ev){
   const desc=(ev.description||'').split('\n')[0].trim();
   if(desc&&desc.length<=90)lines.push('💬 '+desc);
 
-  // social proof: real names/numbers only
   const going=g.yes.map(p=>p.name),n=going.length,meGoing=!!(me&&ev.rsvps[me.id]==='yes');
   let social='';
   if(n>=4)social=`👥 כבר ${n} מגיעים 🔥`;
@@ -617,14 +627,12 @@ function shareText(ev){
 }
 async function shareEvent(id){
   const ev=state.events.find(e=>e.id===id);if(!ev)return;
-  // Phone: its own share sheet (WhatsApp, Messages, Telegram…) gets the text as-is, emojis intact.
   if(navigator.share&&IS_MOBILE){
     try{await navigator.share({text:shareText(ev)});return}
     catch(e){if(e&&e.name==='AbortError')return}
   }
   openShareSheet(ev,false);
 }
-// Fallback (desktop / no share sheet), and the "your outing is live" moment right after creating one
 function shareSheetHTML(ev,justCreated){
   const k=KINDS[ev.kind];
   const head=`<div class="grab"></div><div class="dhead"><h2 class="dt">${justCreated?'היציאה באוויר 🎉':'שיתוף היציאה'}</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>`
@@ -647,7 +655,6 @@ async function shareNative(id){
 }
 function shareWhatsApp(id){
   const ev=state.events.find(e=>e.id===id);if(!ev)return;
-  // WhatsApp web links can garble emojis, so this path sends the same text without them
   const plain=shareText(ev).replace(/[\p{Extended_Pictographic}️‍]/gu,'').split('\n').map(l=>l.trim()).join('\n').replace(/\n{3,}/g,'\n\n').trim();
   window.open('https://api.whatsapp.com/send?text='+encodeURIComponent(plain),'_blank','noopener');
 }
@@ -655,8 +662,9 @@ async function copyText(text,okMsg){
   try{await navigator.clipboard.writeText(text);toast(okMsg)}
   catch(e){toast('לא הצלחנו להעתיק')}
 }
+
 /* ---------- calendar + navigate ---------- */
-const CAL_END_AFTER=3*3600e3; // no end time is stored, so the calendar event defaults to 3 hours
+const CAL_END_AFTER=3*3600e3;
 function calendarUrl(ev){
   const start=new Date(ev.when),end=new Date(ev.when+CAL_END_AFTER);
   const f=d=>d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+'T'+pad(d.getHours())+pad(d.getMinutes())+'00';
@@ -697,7 +705,6 @@ function ridesHTML(ev){
   if(!ev.rides.length){
     h+='<p class="dash" style="margin:2px 0 0">עדיין אין רכבים. תהיו הראשונים.</p>';
   }else{
-    // my own car first, then the rest in the order they were added
     const list=myCar?[myCar,...ev.rides.filter(r=>r!==myCar)]:ev.rides;
     list.forEach(r=>{
       const free=r.seats-r.passengers.length;
@@ -731,7 +738,6 @@ function ridesHTML(ev){
   return h;
 }
 
-// A contradicting action: explain in one line why, and offer the clean way to switch
 function blockedHTML(ev,kind,rideId){
   const role=rideRole(ev,myId());
   let title,text,go;
@@ -753,11 +759,13 @@ function blockedHTML(ev,kind,rideId){
 function openBlocked(eventId,kind,rideId){
   const ev=state.events.find(e=>e.id===eventId);if(!ev)return;
   const html=blockedHTML(ev,kind,rideId);
-  if(!html){refreshSheet();return}   // the state already changed under us: just show the fresh details
+  if(!html){refreshSheet();return}
   openSheet(html);view={type:'blocked',id:eventId};
 }
 
 const delBtn=ev=>`<button class="del" data-act="del" data-id="${esc(ev.id)}">🗑️ מחק יציאה</button>`;
+
+/* ---------- Detail & Rating ---------- */
 function detailHTML(ev){
   const k=KINDS[ev.kind],g=groups(ev),my=ev.rsvps[myId()],d=new Date(ev.when);
   const isPast=ev.when+PAST_AFTER<Date.now();
@@ -769,7 +777,18 @@ function detailHTML(ev){
   if(!isPast)h+=shareBtn(ev)+`<div class="actrow">${navBtn(ev)}${calBtn(ev)}</div>`;
   if(ev.description)h+=`<p class="descr">${esc(ev.description)}</p>`;
   if(isPast){
-    h+=grp('yes','🟢','הגיעו',g.yes)+delBtn(ev)+'<div class="pad"></div>';
+    h+=grp('yes','🟢','הגיעו',g.yes);
+    if(me && ev.rsvps[me.id]==='yes'){
+      h+=`<div class="rating-box" id="rating-box-${esc(ev.id)}">
+           <div class="gh" style="justify-content:center">⭐ איך הייתה היציאה?</div>
+           <div class="stars" data-id="${esc(ev.id)}">
+             ${[1,2,3,4,5].map(i=>`<span class="star" data-act="rate-star" data-val="${i}" data-id="${esc(ev.id)}">★</span>`).join('')}
+           </div>
+           <textarea class="txt area" id="rate-txt-${esc(ev.id)}" placeholder="מה אהבתם / פחות אהבתם? (לא חובה)" style="margin-top:10px;height:70px"></textarea>
+           <button class="submit" data-act="submit-rate" data-id="${esc(ev.id)}" style="height:44px;margin-top:12px;font-size:16px">שמור דירוג</button>
+         </div>`;
+    }
+    h+=delBtn(ev)+'<div class="pad"></div>';
   }else{
     h+=grp('yes','🟢','מגיעים',g.yes)+grp('maybe','🟡','אולי',g.maybe)
       +grp('none','⚪','עדיין לא ענו',g.none)+grp('no','🔴','לא מגיעים',g.no)
@@ -792,7 +811,7 @@ function refreshSheet(){
   sh.innerHTML=detailHTML(ev);sh.scrollTop=st;
 }
 
-/* ---------- create / edit form (same sheet, two modes) ---------- */
+/* ---------- create / edit form ---------- */
 let form=null;
 function dayModeOf(when){
   const diff=Math.round((sod(new Date(when))-sod(new Date()))/864e5);
@@ -843,11 +862,11 @@ function syncForm(){
   });
   mark('kind',form.kind);mark('dm',form.dm);mark('tr',form.transport);mark('tm',$('#f-time').value);
   $('#f-date').hidden=form.dm!=='custom';
-  $('#f-submit').disabled=!(form.kind&&(form.kind!=='other'||$('#f-place').value.trim()));
+  $('#f-submit').disabled=!(form.kind&&(form.kind!=='other'\vert{}\vert{}$('#f-place').value.trim()));
 }
 function submitForm(){
   if(!form||!form.kind)return;
-  const place=$('#f-place').value.trim()||(form.kind==='other'?'':KINDS[form.kind].t);   // no place typed: use the activity name
+  const place=$('#f-place').value.trim()||(form.kind==='other'?'':KINDS[form.kind].t);
   if(!place)return;
   const t=($('#f-time').value||'21:00').split(':').map(Number);
   const base=new Date();
@@ -872,7 +891,6 @@ function submitForm(){
     closeSheet();
     enqueue(()=>store.addEvent(ev)).then(id=>{
       celebrate();
-      // the moment to bring the group in: offer to share right away (only if nothing else was opened meanwhile)
       const created=id&&state.events.find(e=>e.id===String(id));
       if(created&&!sheetEl)openShareSheet(created,true);else toast('היציאה נוצרה 🎉');
     }).catch(writeFail);
@@ -883,9 +901,80 @@ function openEditForm(id){
   openForm(ev);
 }
 
+/* ---------- AI Suggestions ---------- */
+function openAISuggestions(){
+  openSheet(`<div class="grab"></div>
+    <div class="dhead"><h2 class="dt">✨ רעיונות ליציאה</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
+    <div class="pad" id="ai-container">
+      <div class="fl">איפה? (אפשר כמה)</div>
+      <input class="txt" id="ai-loc" placeholder="לדוגמה: תל אביב, הרצליה" autocomplete="off">
+      <div class="fl">כמה אנשים?</div>
+      <input class="txt" type="number" id="ai-pax" value="7" min="1">
+      <div class="fl">גיל ממוצע?</div>
+      <input class="txt" type="number" id="ai-age" value="20" min="1">
+      <div class="fl">מה מחפשים?</div>
+      <textarea class="txt area" id="ai-prefs" placeholder="משהו חברתי עם הרבה אנשים, אווירה טובה..."></textarea>
+      <button class="submit" style="margin-top:24px" data-act="fetch-ai">✨ תן לי רעיונות</button>
+    </div>`);
+  view={type:'ai-suggestions'};
+}
+
+async function fetchAISuggestions(){
+  const container=$('#ai-container');
+  const loc=$('#ai-loc').value.trim(), pax=$('#ai-pax').value, age=$('#ai-age').value, prefs=$('#ai-prefs').value.trim();
+  
+  container.innerHTML=`<div class="ai-loading"><div class="spinner">✨</div>
+    <div>מחפש רעיונות...</div>
+    <div style="font-size:14px;opacity:0.8;margin-top:8px">בודק התאמה לחבורה ולמיקום</div></div>`;
+  
+  try{
+    const history = state.events.filter(e=>e.when < Date.now()).slice(0, 5).map(e=>({place:e.place, kind:e.kind}));
+    const payload = { location: loc||'לא הוגדר', pax, age, prefs, history };
+    const c=window.APP_CONFIG||{};
+    if(!c.SUPABASE_URL) throw new Error('No backend');
+    const res = await fetch(c.SUPABASE_URL+'/functions/v1/quick-responder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+c.SUPABASE_ANON_KEY },
+      body: JSON.stringify(payload)
+    });
+    if(!res.ok) throw new Error('API Error');
+    const data = await res.json();
+    let html='';
+    (data.recommendations||[]).forEach((r, i)=>{
+      const rStr = encodeURIComponent(JSON.stringify(r));
+      html+=`<div class="ai-card">
+        <h3>${esc(r.name)}</h3>
+        <div class="ai-meta">📍 ${esc(r.location)} · ${esc(r.type)} ${r.estimated_cost?' · ₪ '+esc(r.estimated_cost):''}</div>
+        <div class="ai-desc">${esc(r.description)}</div>
+        <div class="ai-why">✨ <b>למה זה מתאים?</b><br>${esc(r.why_it_fits)}</div>
+        <div class="actrow" style="margin-top:14px">
+          <button class="actbtn" data-act="create-ai" data-rec="${rStr}">➕ צור יציאה</button>
+          <a class="actbtn" href="https://waze.com/ul?q=${encodeURIComponent(r.name+' '+r.location)}&navigate=yes" target="_blank">📍 נווט</a>
+        </div>
+        ${r.sources&&r.sources.length?`<div class="ai-src">מקורות: ${esc(r.sources.join(' · '))}</div>`:''}
+      </div>`;
+    });
+    container.innerHTML=html;
+  }catch(e){
+    container.innerHTML=`<div class="msg">לא הצלחנו לייצר המלצות כרגע. נסו שוב עוד מעט.</div>
+    <button class="submit" data-act="open-ai" style="margin-top:16px">חזור</button>`;
+  }
+}
+
+function createFromAI(recStr){
+  try{
+    const r = JSON.parse(decodeURIComponent(recStr));
+    openForm();
+    setTimeout(()=>{
+      const p = $('#f-place'); if(p) p.value = r.name + ' ('+r.location+')';
+      const d = $('#f-descr'); if(d) d.value = r.description + '\n\nלמה זה מתאים? ' + r.why_it_fits;
+      syncForm();
+    },100);
+  }catch(e){}
+}
+
 /* ---------- ride form ---------- */
 let rform=null;
-// sw=true: the user is a passenger right now and chose "leave that car and drive instead"
 function openRideForm(eventId,sw){
   if(!me)return;
   const ev=state.events.find(e=>e.id===eventId);if(!ev)return;
@@ -920,11 +1009,10 @@ function submitRide(){
   if(!rform||!me)return;
   const pickup=$('#r-pickup').value.trim(),note=$('#r-note').value.trim();
   const {eventId,seats,sw}=rform;rform=null;
-  openDetail(eventId);   // back to the outing, where the new car shows up
+  openDetail(eventId);
   enqueue(()=>store.createRide(eventId,me.id,seats,pickup,note,sw))
     .then(()=>{toast('הרכב נוסף 🚗');celebrate()}).catch(writeFail);
 }
-// sw=true: the user is a driver right now and chose "cancel my car and ride with them"
 function joinRide(eventId,rideId,sw){
   if(!me)return;
   const ev=state.events.find(e=>e.id===eventId);if(!ev)return;
@@ -944,7 +1032,6 @@ function leaveRide(eventId,rideId){
 function kickPassenger(eventId,rideId,name){
   enqueue(()=>store.leaveRide(eventId,rideId,name)).then(()=>toast(name+' הוסר מהרכב')).catch(writeFail);
 }
-// Cancelling a car with passengers affects other people: ask for a second tap (no extra screen)
 function deleteRide(eventId,el){
   if(!me)return;
   const n=Number(el.dataset.n)||0;
@@ -991,11 +1078,10 @@ function deleteEvent(el){
 }
 
 /* ---------- RSVP ---------- */
-let tapped=null;   // the RSVP button just pressed gets a one-time "pop"
+let tapped=null;
 function setRsvp(id,s){
   const ev=state.events.find(e=>e.id===id);
   if(!ev||!me||ev.rsvps[me.id]===s)return;
-  // Only "going" people can be in a car: anything else takes them out (the store + database do it; we just say so)
   const role=s!=='yes'?rideRole(ev,me.id):null;
   tapped=id+'|'+s;setTimeout(()=>{tapped=null},700);
   if(s==='yes')celebrate();
@@ -1019,7 +1105,6 @@ function showGate(){
   document.body.appendChild(g);
   paintInvite();
 }
-// Arrived through a shared link: show what they were invited to, right on the name screen
 function paintInvite(){
   const box=$('#invite');if(!box)return;
   const ev=pendingEventId&&state.events.find(e=>e.id===pendingEventId);
@@ -1084,6 +1169,30 @@ document.addEventListener('click',e=>{
   else if(a==='guide-done'){markInstalled();closeSheet();toast('מעולה! חפשו את יוצאים במסך הבית')}
   else if(a==='ob-add'){const o=$('#ob');if(o)o.remove();showGate();doInstall()}
   else if(a==='ob-skip'){const o=$('#ob');if(o)o.remove();showGate()}
+  else if(a==='open-ai')openAISuggestions();
+  else if(a==='fetch-ai')fetchAISuggestions();
+  else if(a==='create-ai')createFromAI(el.dataset.rec);
+  else if(a==='rate-star'){
+    const val = Number(el.dataset.val);
+    const box = el.closest('.stars');
+    if(box) {
+       box.dataset.current = val;
+       box.querySelectorAll('.star').forEach(s => s.classList.toggle('on', Number(s.dataset.val) <= val));
+    }
+  }
+  else if(a==='submit-rate'){
+     const box = document.querySelector(`.stars[data-id="${id}"]`);
+     const val = box ? Number(box.dataset.current) : 0;
+     const txt = $(`#rate-txt-${id}`) ? $(`#rate-txt-${id}`).value : '';
+     if(!val) return toast('בחרו דירוג (כוכבים)');
+     if(!store.rateOuting) return toast('מצב מקומי אינו תומך בדירוג');
+     el.disabled = true;
+     enqueue(()=>store.rateOuting(id, me.id, val, txt)).then(()=>{
+        toast('הדירוג נשמר, תודה!');
+        const rbox = $(`#rating-box-${id}`);
+        if(rbox) rbox.innerHTML = `<div class="gh" style="justify-content:center;color:var(--yes)">✓ הדירוג נשמר</div>`;
+     }).catch(writeFail);
+  }
 });
 document.addEventListener('input',e=>{if(e.target.id==='f-place'||e.target.id==='f-time')syncForm()});
 document.addEventListener('change',e=>{if(e.target.id==='f-time')syncForm()});
@@ -1100,7 +1209,6 @@ setInterval(render,60000);
 /* ---------- boot ---------- */
 (async function boot(){
   render();
-  // came from a shared link: straight to the name, then the outing (the install offer can wait)
   if(!me){if(shouldOnboard()&&!pendingEventId)showOnboarding();else showGate()}
   if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)&&!IS_NATIVE){
     window.addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').catch(()=>{})});
