@@ -523,18 +523,47 @@ function hero(ev){
     <div class="hbtns">${btns(ev,my,'hb','לא')}</div>
   </section>`;
 }
+const MONTHS=['ינו׳','פבר׳','מרץ','אפר׳','מאי','יוני','יולי','אוג׳','ספט׳','אוק׳','נוב׳','דצמ׳'];
+// How far away an outing is, in plain words + a tone (soon / week / far) that drives the chip color
+function relInfo(ts){
+  const diff=Math.round((sod(new Date(ts))-sod(new Date()))/864e5);
+  let t,tone='far';
+  if(ts<=Date.now())return{t:'קורה עכשיו',tone:'now',diff:0};
+  if(diff<=0){t='היום';tone='soon'}
+  else if(diff===1){t='מחר';tone='soon'}
+  else if(diff===2){t='מחרתיים';tone='soon'}
+  else if(diff<7){t='בעוד '+diff+' ימים';tone='week'}
+  else if(diff<14)t='בעוד שבוע';
+  else if(diff<30)t='בעוד '+Math.round(diff/7)+' שבועות';
+  else if(diff<60)t='בעוד חודש';
+  else t='בעוד '+Math.round(diff/30)+' חודשים';
+  return{t,tone,diff};
+}
+// Small round initials for who's coming (real names only, colors are stable per name)
+function avatars(list){
+  if(!list.length)return '<span class="av-empty">היו הראשונים להגיע</span>';
+  const show=list.slice(0,4).map(p=>`<span class="av${me&&p.id===me.id?' me':''}" style="--ah:${hashOf(p.name)%360}" title="${esc(p.name)}">${esc([...p.name][0]||'?')}</span>`).join('');
+  const more=list.length>4?`<span class="av more">+${list.length-4}</span>`:'';
+  return `<span class="avs">${show}${more}</span>`;
+}
 function card(ev){
-  const k=KINDS[ev.kind],g=groups(ev),my=ev.rsvps[myId()],id=esc(ev.id);
+  const k=KINDS[ev.kind],g=groups(ev),my=ev.rsvps[myId()],id=esc(ev.id),d=new Date(ev.when),rel=relInfo(ev.when);
   const pill=my==='maybe'||my==='no'?`<span class="mine ${my}">${my==='maybe'?'🟡 אולי':'🔴 לא מגיע'}</span>`:'';
-  const sub=whenLabel(ev.when)+(trText(ev)?' · '+trText(ev):'');
   const action=my==='yes'
     ?`<button class="cbtn done" data-act="open" data-id="${id}">✓ אתה מגיע</button>`
     :`<button class="cbtn" data-act="rsvp" data-id="${id}" data-s="yes">אני מגיע</button>`;
-  return `<article class="card" style="--h:${k.h}">
+  const going=g.yes.length?`<span class="gtxt"><b>${g.yes.length}</b> ${g.yes.length===1?'מגיע':'מגיעים'}${g.maybe.length?' · '+g.maybe.length+' אולי':''}</span>`:'';
+  return `<article class="card ev ${rel.tone}" style="--h:${k.h}">
     <div class="info" data-act="open" data-id="${id}" role="button" tabindex="0">
-      <div class="crow"><span class="tile">${k.e}</span>
-        <div class="ctxt"><div class="cplace">${esc(ev.place)}</div><div class="cwhen">${sub}</div></div>${pill}</div>
-      <div class="ccnts">${cn(g)}</div>
+      <div class="crow">
+        <div class="dbadge" aria-hidden="true"><span class="dw">${DAYS[d.getDay()]}</span><span class="dd">${d.getDate()}</span><span class="dm">${MONTHS[d.getMonth()]}</span></div>
+        <div class="ctxt">
+          <div class="cplace"><span class="ke" aria-hidden="true">${k.e}</span>${esc(ev.place)}</div>
+          <div class="cwhen">🕘 ${hhmm(d)}${trText(ev)?' · '+trText(ev):''}</div>
+          <span class="rel">${rel.t}</span>
+        </div>${pill}
+      </div>
+      <div class="cfoot">${avatars(g.yes)}${going}</div>
     </div>${action}</article>`;
 }
 function prow(ev){
@@ -560,7 +589,9 @@ function render(){
     h+='<div class="empty-state">אין יציאות קרובות.<br>לחצו על ״+ יציאה״ ופתחו את הראשונה.</div>';
   }else{
     h+=hero(up[0]);
-    up.slice(1).forEach(e=>{h+=card(e)});
+    const rest=up.slice(1),wk=rest.filter(e=>Math.round((sod(new Date(e.when))-sod(new Date()))/864e5)<7),later=rest.filter(e=>!wk.includes(e));
+    if(wk.length){h+='<h2 class="sec">📅 השבוע</h2>';wk.forEach(e=>{h+=card(e)})}
+    if(later.length){h+='<h2 class="sec">🗓️ בהמשך</h2>';later.forEach(e=>{h+=card(e)})}
   }
   if(past.length){h+='<h2 class="sec">🕘 עבר</h2>';past.forEach(e=>{h+=prow(e)})}
   if(state.mode==='local')h+='<p class="note">מצב מקומי: לא מחובר ל-Supabase, הנתונים נשמרים רק במכשיר הזה.</p>';
