@@ -118,7 +118,7 @@ async function suggest(ctx){
   if(!res.ok||!data||data.ok!==true)throw new AIError(data&&MSG[data.error]?data.error:'groq');
   const recs=(Array.isArray(data.recommendations)?data.recommendations:[]).map(cleanRec).filter(Boolean).slice(0,6);
   if(!recs.length)throw new AIError('no_info');
-  return{intro:clip(data.intro,120)||'מצאנו כמה רעיונות שיכולים להתאים לכם:',recs,at:Date.now()};
+  return{intro:clip(data.intro,120)||'מצאנו כמה רעיונות שיכולים להתאים לכם:',recs,general:data.researchOk===false,at:Date.now()};
 }
 
 /* ---------- small helpers for the UI ---------- */

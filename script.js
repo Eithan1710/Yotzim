@@ -584,7 +584,7 @@ function render(){
   const now=Date.now();
   const up=state.events.filter(e=>e.when+PAST_AFTER>=now).sort((a,b)=>a.when-b.when);
   const past=state.events.filter(e=>e.when+PAST_AFTER<now).sort((a,b)=>b.when-a.when).slice(0,15);
-  let h=head()+installUI()+aiEntry()+'<h2 class="sec">🔥 קרוב</h2>';
+  let h=head()+installUI()+'<h2 class="sec">🔥 קרוב</h2>';
   if(!up.length){
     h+='<div class="empty-state">אין יציאות קרובות.<br>לחצו על ״+ יציאה״ ופתחו את הראשונה.</div>';
   }else{
@@ -873,6 +873,7 @@ function openForm(editEv,draft){
   const trs=Object.entries(TRANSPORT).map(([k,v])=>`<button class="ch" data-act="tr" data-v="${k}">${v.e} ${v.t}</button>`).join('');
   openSheet(`<div class="grab"></div>
     <div class="dhead"><h2 class="dt">${editing?'עריכת יציאה':'יציאה חדשה'}</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
+    ${!editing&&!draft&&state.mode==='supabase'&&window.AIOuting?'<button class="aihint" data-act="ai-open">✨ אין רעיון? קבלו רעיונות</button>':''}
     <div>
       <div class="fl">מה עושים?</div><div class="kinds">${kinds}</div>
       <div class="fl">איפה?</div>
@@ -1151,10 +1152,6 @@ const aiState={res:null};
 try{const r=JSON.parse(LS.get('yotz.ai.last')||'null');if(r&&Array.isArray(r.recs)&&r.recs.length&&r.at)aiState.res=r}catch(e){}
 const safeHref=u=>/^https?:\/\//i.test(u||'')?u:'#';
 
-function aiEntry(){
-  if(state.mode!=='supabase'||!AI)return '';
-  return `<button class="aientry" data-act="ai-open"><span class="aie" aria-hidden="true">✨</span><span class="aitx"><b>מה בא לכם לעשות?</b><small>רעיונות ליציאה שמתאימים לחבורה</small></span><span class="chev" aria-hidden="true">‹</span></button>`;
-}
 function loadAIForm(){
   let f=null;try{f=JSON.parse(LS.get('yotz.ai.form')||'null')}catch(e){}
   const defN=Math.min(12,Math.max(2,state.people.length||6));
@@ -1266,7 +1263,7 @@ function recCard(r,i){
 function openAIResults(){
   const res=aiState.res;if(!res){openAIForm();return}
   openSheet(`<div class="grab"></div><div class="dhead"><h2 class="dt">✨ רעיונות ליציאה</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
-    <p class="shsub">${esc(res.intro)}</p>${res.recs.map(recCard).join('')}
+    <p class="shsub">${esc(res.intro)}</p>${res.general?'<p class="gnote" style="margin:8px 0 0">לא הצלחנו להביא מידע עדכני מהרשת, אז אלה רעיונות כלליים. כדאי לבדוק לפני שיוצאים.</p>':''}${res.recs.map(recCard).join('')}
     <div class="pad"><button class="cancel wide" data-act="ai-form">🔄 חיפוש חדש</button>
     <p class="gnote">כדאי לבדוק פרטים לפני שיוצאים: מחירים ושעות עלולים להשתנות.</p></div>`);
   view={type:'ai-results'};

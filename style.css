@@ -280,14 +280,6 @@ html.lock .toast{bottom:auto;top:calc(14px + env(safe-area-inset-top,0px))}
 
 /* ---------- v5: ✨ AI suggestions, ratings, preferences ---------- */
 textarea{-webkit-user-select:text;user-select:text}
-.aientry{display:flex;align-items:center;gap:12px;width:100%;margin:14px 0 0;padding:14px 16px;border-radius:18px;text-align:start;
-  background:linear-gradient(135deg,hsl(265 90% 82%),hsl(325 92% 80%));color:var(--hero-ink);box-shadow:0 8px 20px -12px hsl(290 70% 50%)}
-.aientry .aie{font-size:26px;line-height:1}
-.aientry .aitx{flex:1;min-width:0;display:flex;flex-direction:column}
-.aientry b{font-weight:800;font-size:16.5px}
-.aientry small{font-weight:600;font-size:13.5px;opacity:.8}
-.aientry .chev{font-size:22px;line-height:1}
-.aientry:active{transform:scale(.985)}
 .prefslink{display:block;margin:18px auto 4px;padding:10px 14px;font-weight:800;font-size:14.5px;color:var(--ink-2);text-decoration:underline}
 
 .aiload{padding:6px 0 calc(20px + env(safe-area-inset-bottom,0px));text-align:center}
@@ -354,3 +346,6 @@ textarea{-webkit-user-select:text;user-select:text}
 .gtxt b{color:var(--ink);font-weight:800}
 .av-empty{color:var(--ink-2);font-weight:600;font-size:14.5px}
 .card.ev .mine{margin-inline-start:auto}
+
+.aihint{display:inline-flex;align-items:center;gap:6px;margin:10px 0 0;padding:6px 12px;border-radius:99px;background:var(--chip);color:var(--ink-2);font-weight:700;font-size:13.5px}
+.aihint:active{transform:scale(.97)}
