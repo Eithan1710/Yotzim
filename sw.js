@@ -2,9 +2,9 @@
    - Network first (you always get the latest version when online), cached copy when offline.
    - Only touches files from this same site. Supabase and fonts are never intercepted.
    - All paths are relative, so it works under a sub-path such as https://user.github.io/repo/ */
-const CACHE = 'yotzim-v2';
+const CACHE = 'yotzim-v3';
 const SHELL = [
-  './', 'index.html', 'style.css', 'script.js', 'config.js', 'manifest.json',
+  './', 'index.html', 'style.css', 'script.js', 'ai-service.js', 'config.js', 'manifest.json',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'
 ];
 

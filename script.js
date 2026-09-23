@@ -101,6 +101,14 @@ function maybeOpenDeepLink(){
   openDetail(id);
 }
 
+function cleanRatings(o){
+  const out=Object.create(null);
+  if(o&&typeof o==='object')for(const k in o){
+    const r=o[k],st=Math.round(Number(r&&r.stars));
+    if(st>=1&&st<=5)out[k]={stars:st,comment:String((r&&r.comment)||'').slice(0,300)};
+  }
+  return out;
+}
 function setEvents(o,fresh){
   state.events=Object.entries(o).map(([id,v])=>{
     v=v||{};const rs=Object.create(null);
@@ -115,7 +123,7 @@ function setEvents(o,fresh){
     return{id:String(id),kind:has(KINDS,v.kind)?v.kind:'other',place:String(v.place||'').slice(0,80),when:Number(v.when)||0,
       transport:has(TRANSPORT,v.transport)?v.transport:'unknown',
       description:String(v.description||'').slice(0,500),by:v.by?String(v.by):null,
-      rsvps:rs,rides};
+      rsvps:rs,rides,ratings:cleanRatings(v.ratings)};
   }).filter(e=>e.when);
   // the group = everyone who has answered at least one outing
   const names=new Set();
@@ -147,9 +155,10 @@ const trFromLabel=t=>Object.keys(TRANSPORT).find(k=>TRANSPORT[k].t===t)||'unknow
 
 // Fallback when config.js is empty: everything stays on this device (for trying the UI in a browser)
 function makeLocal(){
-  let data={events:{}};
+  let data={events:{},prefs:{}};
   try{const s=LS.get('yotz.local.v3');if(s)data=JSON.parse(s)}catch(e){}
-  if(!data.events)data={events:{}};
+  if(!data.events)data={events:{},prefs:{}};
+  if(!data.prefs)data.prefs={};
   let onE;
   const save=()=>LS.set('yotz.local.v3',JSON.stringify(data));
   const emit=()=>{onE&&onE(JSON.parse(JSON.stringify(data.events)),true)};
@@ -170,9 +179,17 @@ function makeLocal(){
       for(const id in data.events){
         const ev=data.events[id],r=ev.rsvps;if(has(r,from)){r[to]=r[from];delete r[from]}
         (ev.rides||[]).forEach(x=>{if(x.driver===from)x.driver=to;x.passengers=x.passengers.map(p=>p===from?to:p)});
+        if(ev.ratings&&has(ev.ratings,from)){ev.ratings[to]=ev.ratings[from];delete ev.ratings[from]}
       }
+      if(has(data.prefs,from)){data.prefs[to]=data.prefs[from];delete data.prefs[from]}
       save();emit();
     },
+    async setRating(id,name,stars,comment){
+      const e=data.events[id];if(!e)return;
+      (e.ratings||(e.ratings={}))[name]={stars,comment:comment||''};save();emit();
+    },
+    async loadPrefs(){return Object.keys(data.prefs).map(n=>({name:n,tags:data.prefs[n].tags||[],free_text:data.prefs[n].free_text||''}))},
+    async savePrefs(name,tags,text){data.prefs[name]={tags,free_text:text||''};save()},
     async createRide(eventId,driver,seats,pickup,note,sw){
       const rs=ridesOf(eventId);if(!rs)throw err('not found');
       if(rs.some(r=>r.driver===driver))throw err('כבר יש לך רכב ביציאה הזו','conflict');
@@ -229,14 +246,20 @@ function makeSupabase(url,key){
     }
     return(method==='GET'||(prefer&&prefer.indexOf('representation')>=0))?r.json():null;
   }
-  let cache={},onE,pending=0,lastSig=null,firstDone=false;
+  let cache={},onE,pending=0,lastSig=null,firstDone=false,ratingsAvail=true;
   const emit=()=>onE(cache,firstDone);
   const findRide=(eventId,rideId)=>{const e=cache[eventId];return e?e.rides.find(r=>String(r.id)===String(rideId)):null};
   async function pull(){
     if(pending)return;
     const since=new Date(Date.now()-60*864e5);
+    // ratings live in their own request: if supabase-migration-v5.sql wasn't run yet, the board still works without them
+    const ratingsP=api('GET','outing_ratings?select=event_id,rater_name,stars,comment').catch(()=>null);
     const rows=await api('GET','events?select=*,participants(name,status),rides(id,driver_name,available_seats,pickup_location,note,ride_passengers(passenger_name))&date=gte.'+iso(since)+'&order=date.asc,time.asc');
     if(pending)return;
+    const rr=await ratingsP;
+    ratingsAvail=rr!==null;
+    const rmap={};
+    (rr||[]).forEach(x=>{(rmap[x.event_id]||(rmap[x.event_id]=Object.create(null)))[x.rater_name]={stars:x.stars,comment:x.comment||''}});
     const events={};
     rows.forEach(e=>{
       const [y,m,d]=String(e.date).split('-').map(Number),[hh,mm]=String(e.time).split(':').map(Number);
@@ -245,7 +268,7 @@ function makeSupabase(url,key){
       const rides=(e.rides||[]).map(r=>({id:r.id,driver:r.driver_name,seats:r.available_seats,
         pickup:r.pickup_location||'',note:r.note||'',passengers:(r.ride_passengers||[]).map(p=>p.passenger_name)}));
       events[e.id]={kind:kindFromLabel(e.type),place:e.title||e.location,when:new Date(y,m-1,d,hh,mm).getTime(),
-        transport:trFromLabel(e.transport),description:e.description||'',by:e.created_by||null,rsvps:rs,rides};
+        transport:trFromLabel(e.transport),description:e.description||'',by:e.created_by||null,rsvps:rs,rides,ratings:rmap[e.id]||{}};
     });
     firstDone=true;
     const sig=JSON.stringify(events);
@@ -294,8 +317,16 @@ function makeSupabase(url,key){
       ()=>api('POST','participants?on_conflict=event_id,name',[{event_id:Number(id),name,status:STATUS_OUT[st]}],UP)),
     deleteEvent:id=>write(()=>{delete cache[id]},
       ()=>api('DELETE','events?id=eq.'+encodeURIComponent(id))),
-    renamePerson:(from,to)=>write(null,
-      ()=>api('PATCH','participants?name=eq.'+encodeURIComponent(from),{name:to},'return=minimal')),
+    renamePerson:(from,to)=>write(null,async()=>{
+      await api('PATCH','participants?name=eq.'+encodeURIComponent(from),{name:to},'return=minimal');
+      try{await api('PATCH','outing_ratings?rater_name=eq.'+encodeURIComponent(from),{rater_name:to},'return=minimal')}catch(e){}
+      try{await api('PATCH','user_prefs?name=eq.'+encodeURIComponent(from),{name:to},'return=minimal')}catch(e){}
+    }),
+    ratingsOk:()=>ratingsAvail,
+    setRating:(id,name,stars,comment)=>write(()=>{const e=cache[id];if(e){(e.ratings||(e.ratings={}))[name]={stars,comment:comment||''}}},
+      ()=>api('POST','outing_ratings?on_conflict=event_id,rater_name',[{event_id:Number(id),rater_name:name,stars,comment:comment||null}],UP)),
+    loadPrefs:async()=>{try{return await api('GET','user_prefs?select=name,tags,free_text')}catch(e){return []}},
+    savePrefs:(name,tags,text)=>api('POST','user_prefs?on_conflict=name',[{name,tags,free_text:text||null,updated_at:new Date().toISOString()}],UP),
     // sw=true: "switch" (leave the car I'm in and drive / drop my car and ride with someone). Atomic in the database.
     createRide:(eventId,driver,seats,pickup,note,sw)=>write(null,async()=>{
       try{await api('POST','rpc/create_ride',{p_event_id:Number(eventId),p_driver:driver,p_seats:seats,p_pickup:pickup||'',p_note:note||'',p_switch:!!sw})}
@@ -524,7 +555,7 @@ function render(){
   const now=Date.now();
   const up=state.events.filter(e=>e.when+PAST_AFTER>=now).sort((a,b)=>a.when-b.when);
   const past=state.events.filter(e=>e.when+PAST_AFTER<now).sort((a,b)=>b.when-a.when).slice(0,15);
-  let h=head()+installUI()+'<h2 class="sec">🔥 קרוב</h2>';
+  let h=head()+installUI()+aiEntry()+'<h2 class="sec">🔥 קרוב</h2>';
   if(!up.length){
     h+='<div class="empty-state">אין יציאות קרובות.<br>לחצו על ״+ יציאה״ ופתחו את הראשונה.</div>';
   }else{
@@ -667,16 +698,16 @@ function calendarUrl(ev){
 }
 const calBtn=ev=>`<a class="actbtn" href="${esc(calendarUrl(ev))}" target="_blank" rel="noopener">📅 הוסף ליומן</a>`;
 const navBtn=ev=>`<button class="actbtn" data-act="nav" data-id="${esc(ev.id)}">🗺️ נווט</button>`;
-function navHTML(ev){
+function navHTML(ev,fromAI){
   const q=encodeURIComponent(ev.place);
   const opts=[
     {e:'🗺️',t:'Google Maps',href:'https://www.google.com/maps/search/?api=1&query='+q},
     {e:'🚗',t:'Waze',href:'https://waze.com/ul?q='+q+'&navigate=yes'}
   ];
   if(IS_IOS)opts.push({e:'🍎',t:'Apple Maps',href:'https://maps.apple.com/?q='+q});
-  const rows=opts.map(o=>`<a class="navrow" href="${esc(o.href)}" target="_blank" rel="noopener" data-act="close">
+  const rows=opts.map(o=>`<a class="navrow" href="${esc(o.href)}" target="_blank" rel="noopener" data-act="${fromAI?'ai-back':'close'}">
     <span class="nave">${o.e}</span><span>${o.t}</span></a>`).join('');
-  return `<div class="grab"></div><div class="dhead"><h2 class="dt">נווט באמצעות</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
+  return `<div class="grab"></div><div class="dhead"><h2 class="dt">נווט באמצעות</h2><button class="x" data-act="${fromAI?'ai-back':'close'}" aria-label="סגור">✕</button></div>
     <div class="pad">${rows}</div>`;
 }
 function openNav(id){
@@ -769,7 +800,7 @@ function detailHTML(ev){
   if(!isPast)h+=shareBtn(ev)+`<div class="actrow">${navBtn(ev)}${calBtn(ev)}</div>`;
   if(ev.description)h+=`<p class="descr">${esc(ev.description)}</p>`;
   if(isPast){
-    h+=grp('yes','🟢','הגיעו',g.yes)+delBtn(ev)+'<div class="pad"></div>';
+    h+=grp('yes','🟢','הגיעו',g.yes)+ratingHTML(ev)+delBtn(ev)+'<div class="pad"></div>';
   }else{
     h+=grp('yes','🟢','מגיעים',g.yes)+grp('maybe','🟡','אולי',g.maybe)
       +grp('none','⚪','עדיין לא ענו',g.none)+grp('no','🔴','לא מגיעים',g.no)
@@ -798,14 +829,15 @@ function dayModeOf(when){
   const diff=Math.round((sod(new Date(when))-sod(new Date()))/864e5);
   return diff===0?'today':diff===1?'tomorrow':'custom';
 }
-function openForm(editEv){
+function openForm(editEv,draft){
   if(!state.ready||!me){toast('רגע, הלוח נטען');return}
   const editing=!!editEv;
   const d=editing?new Date(editEv.when):new Date(Math.ceil((Date.now()+10*60e3)/(30*60e3))*(30*60e3));
   form={editId:editing?editEv.id:null,
-    kind:editing?editEv.kind:null,
+    kind:editing?editEv.kind:(draft?draft.kind:null),
     transport:editing?editEv.transport:(has(TRANSPORT,LS.get('yotz.tr'))?LS.get('yotz.tr'):'unknown'),
     dm:editing?dayModeOf(editEv.when):(d.getDate()===new Date().getDate()?'today':'tomorrow')};
+  if(draft&&draft.date&&draft.date>=iso(new Date()))form.dm='custom';   // an event with a real date: start from it
   const kinds=Object.entries(KINDS).map(([k,v])=>`<button class="opt" data-act="kind" data-v="${k}"><span class="e">${v.e}</span>${v.t}</button>`).join('');
   const trs=Object.entries(TRANSPORT).map(([k,v])=>`<button class="ch" data-act="tr" data-v="${k}">${v.e} ${v.t}</button>`).join('');
   openSheet(`<div class="grab"></div>
@@ -813,7 +845,7 @@ function openForm(editEv){
     <div>
       <div class="fl">מה עושים?</div><div class="kinds">${kinds}</div>
       <div class="fl">איפה?</div>
-      <input class="txt" id="f-place" maxlength="60" placeholder="לאגר הוד השרון (לא חובה)" autocomplete="off" enterkeyhint="done" value="${editing?esc(editEv.place):''}">
+      <input class="txt" id="f-place" maxlength="60" placeholder="לאגר הוד השרון (לא חובה)" autocomplete="off" enterkeyhint="done" value="${editing?esc(editEv.place):(draft?esc(draft.place):'')}">
       <div class="fl">מתי?</div>
       <div class="row">
         <button class="ch" data-act="dm" data-v="today">היום</button>
@@ -824,7 +856,7 @@ function openForm(editEv){
       <div class="dtrow"><input class="txt" type="date" id="f-date" hidden><input class="txt" type="time" id="f-time"></div>
       <div class="fl">איך מגיעים?</div><div class="row">${trs}</div>
       <div class="fl">תיאור (לא חובה)</div>
-      <textarea class="txt area" id="f-descr" maxlength="500" placeholder="נפגשים ב-21:30 אצל דניאל, משם ממשיכים לבר…">${editing?esc(editEv.description||''):''}</textarea>
+      <textarea class="txt area" id="f-descr" maxlength="500" placeholder="נפגשים ב-21:30 אצל דניאל, משם ממשיכים לבר…">${editing?esc(editEv.description||''):(draft?esc(draft.description||''):'')}</textarea>
       <div class="formbar">
         ${editing?'<button class="cancel" data-act="close">ביטול</button>':''}
         <button class="submit" id="f-submit" data-act="submit" disabled>${editing?'שמור':'צור יציאה'}</button>
@@ -834,6 +866,7 @@ function openForm(editEv){
   $('#f-time').value=hhmm(d);
   $('#f-date').min=iso(new Date());
   if(editing&&form.dm==='custom')$('#f-date').value=iso(d);
+  else if(draft&&form.dm==='custom'){$('#f-date').value=draft.date;$('#f-time').value='21:00'}
   syncForm();
 }
 function syncForm(){
@@ -1038,6 +1071,211 @@ function submitGate(){
   render();maybeOpenDeepLink();
 }
 
+/* ---------- ratings: optional, only inside a past outing, only for people who were there ---------- */
+let ratingDraft=null;   // keeps a half-typed comment alive while the sheet re-renders
+function ratingHTML(ev){
+  if(store&&store.ratingsOk&&!store.ratingsOk())return '';   // the ratings table isn't set up yet: no UI
+  const rs=Object.values(ev.ratings||{}),n=rs.length;
+  const mean=n?Math.round(rs.reduce((t,r)=>t+r.stars,0)/n*10)/10:null;
+  const summary=n?`<span class="ravg">${mean} <span class="dash">(${n} ${n===1?'דירוג':'דירוגים'})</span></span>`:'';
+  const went=!!(me&&ev.rsvps[me.id]==='yes');
+  if(!went)return n?`<div class="grp"><div class="gh">⭐ דירוג היציאה ${summary}</div></div>`:'';
+  const my=ev.ratings[me.id]||null;
+  const d=ratingDraft&&ratingDraft.id===ev.id?ratingDraft:null;
+  const stars=d?d.stars:(my?my.stars:0);
+  const comment=d?d.comment:(my?my.comment:'');
+  const st=[1,2,3,4,5].map(i=>`<button class="star${i<=stars?' on':''}" data-act="rate" data-id="${esc(ev.id)}" data-v="${i}" aria-label="${i} מתוך 5" aria-pressed="${i===stars}">★</button>`).join('');
+  const more=stars
+    ?`<textarea class="txt area" id="r-comment" maxlength="300" placeholder="מה אהבתם ומה פחות? (לא חובה)">${esc(comment)}</textarea>
+      <button class="actbtn rsave" data-act="rate-save" data-id="${esc(ev.id)}">שמירת ההערה</button>`
+    :'<p class="dash" style="margin:0">לא חובה. זה עוזר להציע רעיונות שמתאימים לכם.</p>';
+  return `<div class="grp rating"><div class="gh">⭐ איך הייתה היציאה? ${summary}</div><div class="stars" role="group" aria-label="דירוג">${st}</div>${more}</div>`;
+}
+function rateStars(id,v){
+  if(!me||!(v>=1&&v<=5))return;
+  const ev=state.events.find(e=>e.id===id);if(!ev)return;
+  const ta=$('#r-comment');
+  const comment=(ta?ta.value:(ratingDraft&&ratingDraft.id===id?ratingDraft.comment:((ev.ratings[me.id]||{}).comment||''))).trim();
+  ratingDraft={id,stars:v,comment};
+  celebrate();
+  enqueue(()=>store.setRating(id,me.id,v,comment)).then(()=>{ratingDraft=null})
+    .catch(e=>{ratingDraft=null;writeFail(e);refreshSheet()});
+}
+function saveComment(id){
+  if(!me)return;
+  const ev=state.events.find(e=>e.id===id);if(!ev)return;
+  const my=ev.ratings[me.id];
+  const stars=ratingDraft&&ratingDraft.id===id?ratingDraft.stars:(my?my.stars:0);
+  if(!stars){toast('בחרו כוכבים קודם');return}
+  const ta=$('#r-comment'),comment=(ta?ta.value:'').trim();
+  enqueue(()=>store.setRating(id,me.id,stars,comment)).then(()=>{ratingDraft=null;toast('נשמר, תודה!')}).catch(writeFail);
+}
+
+/* ---------- ✨ AI suggestions (UI only; the logic is in ai-service.js, the Groq key is in the Edge Function) ---------- */
+const AI=window.AIOuting;
+const AI_AREAS=['תל אביב','הרצליה','כפר סבא','אזור השרון'];
+const PREF_TAGS=[['מסיבות','🎉'],['מקומות חברתיים','👥'],['חוף','🏖️'],['ברים','🍺'],['מוזיקה','🎵'],['אוכל','🍔'],['טיולים','🌳'],['ספורט','⚽'],['גיימינג','🎮'],['ביליארד','🎱']];
+let aiRun=0,aiForm=null,prefsDraft=null;
+const aiState={res:null};
+try{const r=JSON.parse(LS.get('yotz.ai.last')||'null');if(r&&Array.isArray(r.recs)&&r.recs.length&&r.at)aiState.res=r}catch(e){}
+const safeHref=u=>/^https?:\/\//i.test(u||'')?u:'#';
+
+function aiEntry(){
+  if(state.mode!=='supabase'||!AI)return '';
+  return `<button class="aientry" data-act="ai-open"><span class="aie" aria-hidden="true">✨</span><span class="aitx"><b>מה בא לכם לעשות?</b><small>רעיונות ליציאה שמתאימים לחבורה</small></span><span class="chev" aria-hidden="true">‹</span></button>`;
+}
+function loadAIForm(){
+  let f=null;try{f=JSON.parse(LS.get('yotz.ai.form')||'null')}catch(e){}
+  const defN=Math.min(12,Math.max(2,state.people.length||6));
+  const areas=Array.isArray(f&&f.areas)?f.areas.map(a=>String(a).slice(0,40)).filter(Boolean).slice(0,4):[];
+  aiForm={areas:areas.length?areas:['תל אביב'],n:Math.min(40,Math.max(1,Number(f&&f.n)||defN)),age:Math.min(60,Math.max(16,Number(f&&f.age)||20)),wish:''};
+}
+const stepHTML=(id,val,dec,inc,l1,l2)=>`<div class="stepper"><button class="stbtn" data-act="${dec}" aria-label="${l1}">－</button><span class="stval" id="${id}">${val}</span><button class="stbtn" data-act="${inc}" aria-label="${l2}">＋</button></div>`;
+function aiFormHTML(){
+  const all=[...AI_AREAS,...aiForm.areas.filter(a=>!AI_AREAS.includes(a))];
+  const chips=all.map(a=>{const on=aiForm.areas.includes(a);return `<button class="ch${on?' on':''}" data-act="ai-area" data-v="${esc(a)}" aria-pressed="${on}">${esc(a)}</button>`}).join('');
+  return `<div class="grab"></div><div class="dhead"><h2 class="dt">✨ מה בא לכם לעשות?</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
+    <div class="fl">איפה?</div><div class="row">${chips}</div>
+    <div class="dtrow"><input class="txt" id="ai-area-in" maxlength="30" placeholder="עיר או אזור אחר" autocomplete="off" enterkeyhint="done" aria-label="אזור נוסף"><button class="ch" data-act="ai-area-add">+ הוסף</button></div>
+    <div class="fl">כמה אנשים?</div>${stepHTML('ai-n',aiForm.n,'ai-n-dec','ai-n-inc','פחות אנשים','עוד אנשים')}
+    <div class="fl">גיל</div>${stepHTML('ai-age',aiForm.age,'ai-age-dec','ai-age-inc','גיל נמוך יותר','גיל גבוה יותר')}
+    <div class="fl">מה אתם מחפשים?</div>
+    <textarea class="txt area" id="ai-wish" maxlength="400" placeholder="משהו חברתי, עם הרבה אנשים, מוזיקה ואווירה טובה">${esc(aiForm.wish)}</textarea>
+    <button class="prefslink" data-act="prefs-open">⚙️ ההעדפות שלי</button>
+    <div class="formbar"><button class="submit" id="ai-go" data-act="ai-go"${aiForm.areas.length?'':' disabled'}>✨ תנו לי רעיונות</button></div>`;
+}
+function openAI(){
+  if(!state.ready||!me||!AI){toast('רגע, הלוח נטען');return}
+  const fresh=aiState.res&&Date.now()-aiState.res.at<864e5;
+  if(fresh)openAIResults();else openAIForm();
+}
+function openAIForm(){
+  if(!state.ready||!me)return;
+  if(!aiForm)loadAIForm();
+  openSheet(aiFormHTML());view={type:'ai-form'};
+}
+function toggleArea(v,el){
+  const i=aiForm.areas.indexOf(v);
+  if(i>=0)aiForm.areas.splice(i,1);
+  else if(aiForm.areas.length>=4){toast('עד 4 אזורים');return}
+  else aiForm.areas.push(v);
+  const on=aiForm.areas.includes(v);el.classList.toggle('on',on);el.setAttribute('aria-pressed',on);
+  const go=$('#ai-go');if(go)go.disabled=!aiForm.areas.length;
+}
+function addArea(){
+  const inp=$('#ai-area-in');if(!inp)return;
+  const v=inp.value.replace(/\s+/g,' ').trim().slice(0,30);if(!v)return;
+  if(!aiForm.areas.includes(v)){
+    if(aiForm.areas.length>=4){toast('עד 4 אזורים');return}
+    aiForm.areas.push(v);
+  }
+  const sh=sheetEl&&sheetEl.querySelector('.sheet');if(sh){const st=sh.scrollTop;sh.innerHTML=aiFormHTML();sh.scrollTop=st}
+}
+function stepAI(a){
+  if(a==='ai-n-dec')aiForm.n=Math.max(1,aiForm.n-1);
+  else if(a==='ai-n-inc')aiForm.n=Math.min(40,aiForm.n+1);
+  else if(a==='ai-age-dec')aiForm.age=Math.max(16,aiForm.age-1);
+  else aiForm.age=Math.min(60,aiForm.age+1);
+  const n=$('#ai-n'),g=$('#ai-age');if(n)n.textContent=aiForm.n;if(g)g.textContent=aiForm.age;
+}
+// Honest loading screen: one request does the research and the analysis, so there are no step-by-step fake ticks
+function showAILoading(){
+  openSheet(`<div class="grab"></div><div class="aiload" role="status" aria-live="polite"><div class="spark" aria-hidden="true">✨</div>
+    <h2 class="dt">מחפשים רעיונות שמתאימים לחבורה…</h2>
+    <p class="why">בודקים מה קורה עכשיו באזור ומשווים ליציאות ולדירוגים הקודמים שלכם. זה יכול לקחת עד חצי דקה.</p>
+    <div class="skel s3"></div><div class="skel s3"></div>
+    <button class="cancel wide" data-act="ai-cancel">ביטול</button></div>`);
+  view={type:'ai-loading'};
+}
+async function runAI(){
+  if(!AI||!aiForm||!aiForm.areas.length)return;
+  const my=++aiRun;
+  LS.set('yotz.ai.form',JSON.stringify({areas:aiForm.areas,n:aiForm.n,age:aiForm.age}));
+  showAILoading();
+  let prefsRows=[];try{prefsRows=await store.loadPrefs()}catch(e){}
+  let res=null,msg=null;
+  try{
+    const ctx=AI.buildContext({events:state.events,kinds:KINDS,now:Date.now(),pastAfter:PAST_AFTER,form:aiForm,prefsRows});
+    res=await AI.suggest(ctx);
+  }catch(e){msg=(e&&e.userMsg)||AI.MSG.groq}   // only our own short Hebrew messages ever reach the screen
+  if(my!==aiRun)return;                          // cancelled, or a newer search started
+  const waiting=!!(view&&view.type==='ai-loading');
+  if(res){
+    aiState.res=res;LS.set('yotz.ai.last',JSON.stringify(res));
+    if(waiting)openAIResults();else toast('הרעיונות מוכנים ✨');
+  }else if(waiting){
+    openSheet(`<div class="grab"></div><div class="dhead"><h2 class="dt">✨ רעיונות</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
+      <div class="msg" style="margin-top:18px">${esc(msg)}</div>
+      <div class="pad"><button class="submit" data-act="ai-go">נסו שוב</button><button class="cancel wide" data-act="ai-form">שינוי החיפוש</button></div>`);
+    view={type:'ai-error'};
+  }else toast(msg);
+}
+const chip=(e,t)=>`<span class="rchip">${e} ${esc(t)}</span>`;
+function recCard(r,i){
+  const k=KINDS[r.kind]||KINDS.other;
+  const q=AI.navQuery(r);
+  let date='';
+  if(r.date){const [y,m,d]=r.date.split('-').map(Number);date=ddmm(new Date(y,m-1,d))}
+  const chips=(r.cost?chip('💰',r.cost):'')+(r.group?chip('👥',r.group):'')+(r.age?chip('🎂',r.age):'')
+    +(r.social!=null?chip('🔥','רמה חברתית '+r.social+'/5'):'')+(date?chip('📅',date):'')
+    +(r.verified?'':'<span class="rchip warn">רעיון כללי, לא אומת</span>');
+  const labels=[...new Set(r.sources.map(s=>AI.sourceLabel(s)))];
+  const src=r.sources.length
+    ?`<details class="rsrc"><summary>מקורות · ${esc(labels.join(' · '))}</summary><div class="rlinks">${r.sources.map(s=>`<a href="${esc(safeHref(s.url))}" target="_blank" rel="noopener noreferrer" dir="ltr">${esc(AI.sourceLabel(s))}</a>`).join('')}</div></details>`:'';
+  return `<article class="rec" style="--h:${k.h}">
+    <div class="rtop"><span class="tile">${k.e}</span><div class="ctxt"><div class="cplace">${esc(r.name)}</div>
+      <div class="cwhen">${r.location?'📍 '+esc(r.location):''}${r.type?(r.location?' · ':'')+esc(r.type):''}</div></div></div>
+    <p class="rdesc">${esc(r.description)}</p>
+    ${r.why?`<div class="rwhy"><b>למה זה מתאים לכם</b>${esc(r.why)}</div>`:''}
+    ${chips?`<div class="rchips">${chips}</div>`:''}${src}
+    <div class="actrow">${q?`<button class="actbtn" data-act="ai-nav" data-i="${i}">📍 נווט</button>`:''}<a class="actbtn" href="${esc(safeHref(AI.moreInfoUrl(r)))}" target="_blank" rel="noopener noreferrer">🌐 מידע נוסף</a></div>
+    <button class="rcreate" data-act="ai-create" data-i="${i}">➕ צור יציאה</button>
+  </article>`;
+}
+function openAIResults(){
+  const res=aiState.res;if(!res){openAIForm();return}
+  openSheet(`<div class="grab"></div><div class="dhead"><h2 class="dt">✨ רעיונות ליציאה</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
+    <p class="shsub">${esc(res.intro)}</p>${res.recs.map(recCard).join('')}
+    <div class="pad"><button class="cancel wide" data-act="ai-form">🔄 חיפוש חדש</button>
+    <p class="gnote">כדאי לבדוק פרטים לפני שיוצאים: מחירים ושעות עלולים להשתנות.</p></div>`);
+  view={type:'ai-results'};
+}
+function openAINav(i){
+  const r=aiState.res&&aiState.res.recs[i],q=r&&AI.navQuery(r);if(!q)return;
+  openSheet(navHTML({place:q},true));view={type:'nav'};   // same Maps / Waze / Apple Maps sheet as an outing
+}
+function createFromIdea(i){
+  const r=aiState.res&&aiState.res.recs[i];if(!r)return;
+  openForm(null,AI.toDraft(r));                            // the normal create form, already filled in
+}
+
+/* ---------- preferences (kept in Supabase, sent to the AI without names) ---------- */
+async function openPrefs(){
+  if(!me||!store)return;
+  let rows=[];try{rows=await store.loadPrefs()}catch(e){}
+  const mine=rows.find(r=>r.name===me.name);
+  prefsDraft={tags:new Set((mine&&mine.tags)||[]),text:(mine&&mine.free_text)||''};
+  const chips=PREF_TAGS.map(([t,e])=>{const on=prefsDraft.tags.has(t);return `<button class="ch${on?' on':''}" data-act="pref-tag" data-v="${esc(t)}" aria-pressed="${on}">${e} ${t}</button>`}).join('');
+  openSheet(`<div class="grab"></div><div class="dhead"><h2 class="dt">ההעדפות שלי</h2><button class="x" data-act="ai-form" aria-label="חזרה">✕</button></div>
+    <p class="shsub">עוזר לרעיונות להתאים לחבורה. נשלח ל-AI בלי שמות, ואפשר לשנות בכל רגע.</p>
+    <div class="fl">מה אתם אוהבים?</div><div class="row">${chips}</div>
+    <div class="fl">במילים שלכם (לא חובה)</div>
+    <textarea class="txt area" id="p-text" maxlength="300" placeholder="אני אוהב מקומות חברתיים עם הרבה אנשים בגיל שלי">${esc(prefsDraft.text)}</textarea>
+    <div class="formbar"><button class="submit" data-act="pref-save">שמור</button></div>`);
+  view={type:'prefs'};
+}
+function togglePrefTag(v,el){
+  if(!prefsDraft)return;
+  if(prefsDraft.tags.has(v))prefsDraft.tags.delete(v);else prefsDraft.tags.add(v);
+  const on=prefsDraft.tags.has(v);el.classList.toggle('on',on);el.setAttribute('aria-pressed',on);
+}
+function savePrefs(){
+  if(!prefsDraft||!me)return;
+  const tags=[...prefsDraft.tags],text=(prefsDraft.text||'').trim().slice(0,300),name=me.name;
+  openAIForm();
+  enqueue(()=>store.savePrefs(name,tags,text)).then(()=>toast('ההעדפות נשמרו')).catch(writeFail);
+}
+
 /* ---------- events ---------- */
 document.addEventListener('click',e=>{
   const el=e.target.closest('[data-act]');if(!el)return;
@@ -1084,6 +1322,30 @@ document.addEventListener('click',e=>{
   else if(a==='guide-done'){markInstalled();closeSheet();toast('מעולה! חפשו את יוצאים במסך הבית')}
   else if(a==='ob-add'){const o=$('#ob');if(o)o.remove();showGate();doInstall()}
   else if(a==='ob-skip'){const o=$('#ob');if(o)o.remove();showGate()}
+  else if(a==='rate')rateStars(id,Number(el.dataset.v));
+  else if(a==='rate-save')saveComment(id);
+  else if(a==='ai-open')openAI();
+  else if(a==='ai-form')openAIForm();
+  else if(a==='ai-back')openAIResults();
+  else if(a==='ai-area')toggleArea(el.dataset.v,el);
+  else if(a==='ai-area-add')addArea();
+  else if(a==='ai-n-dec'||a==='ai-n-inc'||a==='ai-age-dec'||a==='ai-age-inc'){e.preventDefault();stepAI(a)}
+  else if(a==='ai-go')runAI();
+  else if(a==='ai-cancel'){aiRun++;openAIForm()}
+  else if(a==='ai-nav')openAINav(Number(el.dataset.i));
+  else if(a==='ai-create')createFromIdea(Number(el.dataset.i));
+  else if(a==='prefs-open')openPrefs();
+  else if(a==='pref-tag')togglePrefTag(el.dataset.v,el);
+  else if(a==='pref-save')savePrefs();
+});
+document.addEventListener('input',e=>{
+  const t=e.target.id;
+  if(t==='ai-wish'&&aiForm)aiForm.wish=e.target.value;
+  else if(t==='p-text'&&prefsDraft)prefsDraft.text=e.target.value;
+  else if(t==='r-comment'&&view&&view.type==='detail'){
+    const ev=state.events.find(x=>x.id===view.id),my=ev&&me&&ev.ratings[me.id];
+    ratingDraft={id:view.id,stars:ratingDraft&&ratingDraft.id===view.id?ratingDraft.stars:(my?my.stars:0),comment:e.target.value};
+  }
 });
 document.addEventListener('input',e=>{if(e.target.id==='f-place'||e.target.id==='f-time')syncForm()});
 document.addEventListener('change',e=>{if(e.target.id==='f-time')syncForm()});
@@ -1092,6 +1354,7 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&e.target.id==='g-name'){e.preventDefault();submitGate()}
   if(e.key==='Enter'&&e.target.id==='r-name'){e.preventDefault();saveRename()}
   if(e.key==='Enter'&&e.target.id==='f-place'){e.preventDefault();e.target.blur()}
+  if(e.key==='Enter'&&e.target.id==='ai-area-in'){e.preventDefault();addArea()}
   if((e.key==='Enter'||e.key===' ')&&e.target.getAttribute&&e.target.getAttribute('role')==='button'){e.preventDefault();e.target.click()}
 });
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)render()});
