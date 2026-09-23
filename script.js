@@ -932,7 +932,7 @@ async function fetchAISuggestions(){
     const payload = { location: loc||'לא הוגדר', pax, age, prefs, history };
     const c=window.APP_CONFIG||{};
     if(!c.SUPABASE_URL) throw new Error('No backend');
-    const res = await fetch(c.SUPABASE_URL+'/functions/v1/quick-responder', {
+    const res = await fetch(c.SUPABASE_URL+'/functions/v1/ai-suggestions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+c.SUPABASE_ANON_KEY },
       body: JSON.stringify(payload)
