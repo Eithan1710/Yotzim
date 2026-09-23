@@ -1,3 +1,4 @@
+/* style.css */
 :root{
   --bg:#ECEEF5;--surface:#FFFFFF;--ink:#191B2C;--ink-2:#5D627A;--line:#DCDFEC;--chip:#F1F2F8;
   --yes:#0B7A4A;--maybe:#8A5B00;--none:#5D627A;--no:#B82A30;
@@ -60,20 +61,50 @@ h2.sec{font:400 19px/1 var(--display);margin:26px 2px 12px}
 .hb{height:50px;border-radius:15px;background:rgba(255,255,255,.62);font-weight:800;font-size:16px;color:var(--hero-ink)}
 .hb.on{background:var(--hero-ink);color:#fff}
 
-/* ---------- Other upcoming: quiet ---------- */
-.card{background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:16px;margin-bottom:12px}
-.crow{display:flex;gap:12px;align-items:center}
-.tile{width:52px;height:52px;border-radius:15px;display:grid;place-items:center;font-size:26px;flex:none;background:hsl(var(--h) var(--tile-s) var(--tile-l))}
-.ctxt{min-width:0;flex:1}
-.cplace{font-weight:800;font-size:18px;overflow-wrap:anywhere}
-.cwhen{color:var(--ink-2);font-weight:600;font-size:15px}
-.mine{font-size:13px;font-weight:800;border-radius:99px;padding:4px 10px;flex:none}
-.mine.maybe{background:var(--maybe-bg);color:var(--maybe)}
-.mine.no{background:var(--no-bg);color:var(--no)}
-.ccnts{display:flex;flex-wrap:wrap;gap:4px 14px;margin:12px 0;color:var(--ink-2);font-weight:600;font-size:14.5px}
-.ccnts .cnt:first-child{color:var(--ink);font-weight:800}
-.cbtn{width:100%;height:46px;border-radius:14px;font-weight:800;background:hsl(var(--h) 92% 72%);color:var(--hero-ink)}
-.cbtn.done{background:var(--yes-bg);color:var(--yes)}
+/* ---------- Other upcoming: Polished & Alive ---------- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 16px;
+  margin-bottom: 12px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(25, 27, 44, 0.03);
+  transition: transform .12s, box-shadow .12s;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .card { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25); }
+}
+:root[data-theme="dark"] .card { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25); }
+.card:active { transform: scale(.98); }
+.card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 4px;
+  background: hsl(var(--h) 85% 65%);
+}
+.crow { display: flex; gap: 12px; align-items: center; }
+.tile { width: 52px; height: 52px; border-radius: 15px; display: grid; place-items: center; font-size: 26px; flex: none; background: hsl(var(--h) var(--tile-s) var(--tile-l)); }
+.ctxt { min-width: 0; flex: 1; }
+.cplace-wrap { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.cplace { font-weight: 800; font-size: 18.5px; line-height: 1.15; overflow-wrap: anywhere; }
+.cwhen { color: var(--ink-2); font-weight: 600; font-size: 14.5px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.crel { background: var(--chip); color: var(--ink); border-radius: 8px; padding: 2px 7px; font-size: 12px; font-weight: 800; }
+.crel.today { background: var(--yes-bg); color: var(--yes); }
+.mine { font-size: 13px; font-weight: 800; border-radius: 99px; padding: 4px 10px; flex: none; }
+.mine.maybe { background: var(--maybe-bg); color: var(--maybe); }
+.mine.no { background: var(--no-bg); color: var(--no); }
+.c-going { margin: 14px 0 12px; padding: 12px; background: var(--chip); border-radius: 14px; }
+.ccnts { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--ink-2); font-weight: 600; font-size: 14px; }
+.ccnts .cnt:first-child { color: var(--ink); font-weight: 800; }
+.c-names { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.nm-sm { background: var(--surface); color: var(--ink); border-radius: 99px; padding: 4px 10px; font-weight: 600; font-size: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+.nm-sm.me { box-shadow: 0 0 0 1.5px var(--ink); }
+.c-none { font-size: 14px; color: var(--ink-2); font-weight: 600; margin-top: 6px; }
+.cbtn { width: 100%; height: 46px; border-radius: 14px; font-weight: 800; background: hsl(var(--h) 92% 72%); color: var(--hero-ink); }
+.cbtn.done { background: var(--yes-bg); color: var(--yes); }
 
 /* ---------- Past ---------- */
 .prow{display:flex;align-items:center;gap:10px;width:100%;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:12px 14px;margin-bottom:8px;text-align:start}
@@ -152,8 +183,6 @@ body{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;touch-
 input{-webkit-user-select:text;user-select:text}
 
 /* ---------- Add to home screen (PWA) ---------- */
-/* Opened from the home screen: the status bar is transparent with white text,
-   so keep a dark strip behind it (matches the dark theme background) */
 html.standalone body::before{content:"";position:fixed;top:0;left:0;right:0;height:env(safe-area-inset-top,0px);background:#12131C;z-index:100}
 
 .install{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;margin:14px 0 0;padding:14px 16px;border-radius:18px;background:hsl(38 92% 72%);color:var(--hero-ink);font-weight:800;font-size:16px;text-align:start}
@@ -190,7 +219,6 @@ html.standalone body::before{content:"";position:fixed;top:0;left:0;right:0;heig
 /* ---------- create form: the button is always visible ---------- */
 .formbar{position:sticky;bottom:0;background:var(--surface);margin:10px -18px 0;padding:12px 18px calc(14px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line)}
 .formbar .submit{margin-top:0}
-
 
 /* ---------- v3: description, calendar/navigate, edit, rides ---------- */
 .descr{margin:14px 0 0;padding:14px;background:var(--chip);border-radius:14px;font-size:15px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -231,7 +259,6 @@ html.standalone body::before{content:"";position:fixed;top:0;left:0;right:0;heig
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--share-bg:#25D366;--share-ink:#062812;--bubble:#005C4B;--bubble-ink:#E9EDEF}}
 :root[data-theme="dark"]{--share-bg:#25D366;--share-ink:#062812;--bubble:#005C4B;--bubble-ink:#E9EDEF}
 
-/* Share: the one colored action in the details sheet */
 .sharebtn{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;height:54px;margin-top:16px;border-radius:16px;
   background:var(--share-bg);color:var(--share-ink);font-weight:800;font-size:17px;
   box-shadow:0 8px 20px -10px var(--share-bg);transition:transform .12s,filter .15s}
@@ -248,7 +275,6 @@ html.standalone body::before{content:"";position:fixed;top:0;left:0;right:0;heig
   font-size:15px;line-height:1.5;overflow-wrap:anywhere;-webkit-user-select:text;user-select:text;box-shadow:0 1px 1px rgba(0,0,0,.08)}
 .pad>.actrow{margin-top:10px}
 
-/* Ride rules: a blocked action still looks tappable, but clearly secondary; tapping explains why */
 .ridebtn.blocked{background:transparent;color:var(--ink-2);box-shadow:inset 0 0 0 1.5px var(--line)}
 .ridebtn.blocked::before{content:"🔒";margin-inline-end:6px;font-size:13px}
 .ridebtn.add.blocked{background:transparent;color:var(--ink-2)}
@@ -259,13 +285,11 @@ html.standalone body::before{content:"";position:fixed;top:0;left:0;right:0;heig
 .cancel.wide{display:block;width:100%;height:52px;margin-top:10px}
 .del{transition:background .15s}
 
-/* Invite on the name screen (arrived from a shared link) */
 .invite{margin:30px 0 -18px;padding:14px 16px;border-radius:20px;background:rgba(255,255,255,.62);animation:rise .35s cubic-bezier(.2,.8,.2,1)}
 .inv-k{font-weight:800;font-size:14px;opacity:.75}
 .inv-t{font:400 26px/1.15 var(--display);margin:4px 0 2px;overflow-wrap:anywhere}
 .inv-w{font-weight:700}
 
-/* Gentle feedback */
 .hb,.sb,.cbtn,.ridebtn,.submit,.fab{transition:transform .12s,background-color .18s,color .18s}
 .hb:active,.sb:active,.cbtn:active,.ridebtn:active{transform:scale(.97)}
 .hb.pop,.sb.pop{animation:pop .38s cubic-bezier(.34,1.56,.64,1)}
@@ -273,7 +297,26 @@ html.standalone body::before{content:"";position:fixed;top:0;left:0;right:0;heig
 .toast.in{animation:toastin .25s cubic-bezier(.2,.8,.2,1)}
 @keyframes toastin{from{opacity:0;transform:translate(-50%,8px)}to{opacity:1;transform:translate(-50%,0)}}
 @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-/* while a sheet is open its sticky buttons own the bottom edge: show messages at the top instead */
 html.lock .toast{bottom:auto;top:calc(14px + env(safe-area-inset-top,0px))}
 .bubble .lnk{color:#027EB5;text-decoration:underline;word-break:break-all;unicode-bidi:isolate}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .bubble .lnk{color:#53BDEB}}
+
+/* ---------- AI Suggestions & Ratings ---------- */
+.ai-fab { background: linear-gradient(135deg, #6B46C1, #9F7AEA); color: white; border-radius: 99px; padding: 6px 14px; font-weight: 800; display: inline-flex; align-items: center; gap: 6px; font-size: 14px; box-shadow: 0 4px 12px rgba(107, 70, 193, 0.3); }
+.ai-loading { text-align: center; padding: 40px 20px; color: var(--ink); font-weight: 700; }
+.ai-loading .spinner { font-size: 40px; animation: pulse 1.5s infinite; margin-bottom: 16px; display: inline-block; }
+@keyframes pulse { 0% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.1); opacity: 0.7; } 100% { transform: scale(1); opacity: 1; } }
+.ai-card { background: var(--surface); border: 2px solid #E9D8FD; border-radius: 20px; padding: 16px; margin-bottom: 12px; }
+:root[data-theme="dark"] .ai-card { border-color: #553C9A; }
+.ai-card h3 { margin: 0 0 6px; font: 400 22px/1.1 var(--display); color: #553C9A; }
+:root[data-theme="dark"] .ai-card h3 { color: #B794F4; }
+.ai-meta { color: var(--ink-2); font-weight: 600; font-size: 14px; margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
+.ai-desc { font-size: 15px; margin-bottom: 12px; line-height: 1.4; }
+.ai-why { background: #FAF5FF; padding: 10px 12px; border-radius: 12px; font-size: 14px; color: #44337A; margin-bottom: 14px; }
+:root[data-theme="dark"] .ai-why { background: #2D3748; color: #E9D8FD; }
+.ai-src { font-size: 12px; color: var(--ink-2); margin-top: 10px; font-weight: 600; }
+
+.rating-box { background: var(--chip); border-radius: 16px; padding: 16px; margin-top: 16px; text-align: center; }
+.stars { display: flex; justify-content: center; gap: 8px; margin: 10px 0; direction: ltr; }
+.star { font-size: 32px; color: var(--line); cursor: pointer; transition: color 0.2s; }
+.star.on { color: #F6E05E; }
