@@ -21,7 +21,7 @@ function collect(node: unknown, out: Evidence[], depth = 0) {
   if (typeof node !== "object") return;
   const o = node as Record<string, unknown>;
   if (isHttp(o.url) && (o.title || o.content || o.snippet)) {
-    out.push({ title: clip(o.title, 120), url: o.url, snippet: clip(o.content ?? o.snippet, 600) });
+    out.push({ title: clip(o.title, 120), url: o.url, snippet: clip(o.content ?? o.snippet ?? o.title, 600) });
   }
   for (const k of Object.keys(o)) if (typeof o[k] === "object") collect(o[k], out, depth + 1);
 }
@@ -31,9 +31,10 @@ const groqCompound: Provider = {
   name: "groq-compound",
   enabled: () => !!Deno.env.get("GROQ_API_KEY"),
   async research(ctx, today) {
-    const model = Deno.env.get("GROQ_RESEARCH_MODEL") ?? "groq/compound";
+    // if the full system fails (rate limit, timeout, no access) the lighter one gets a try
+    const models = [Deno.env.get("GROQ_RESEARCH_MODEL") ?? "groq/compound", "groq/compound-mini"];
     // one search per area, in parallel, so a big area doesn't drown a small one
-    const jobs = ctx.areas.slice(0, 3).map(async (area) => {
+    const one = async (area: string, model: string) => {
       const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
         signal: AbortSignal.timeout(70_000),
@@ -60,14 +61,25 @@ const groqCompound: Provider = {
           ],
         }),
       });
-      if (!r.ok) throw new Error("compound " + r.status);
+      if (!r.ok) throw new Error(`${model} HTTP ${r.status}: ${clip(await r.text(), 300)}`);
       const j = await r.json();
       const found: Evidence[] = [];
-      collect(j?.choices?.[0]?.message?.executed_tools, found);
+      const msg = j?.choices?.[0]?.message;
+      collect(msg?.executed_tools, found);
+      if (!found.length) collect(msg, found);   // the shape differs between versions: look everywhere in the message
+      if (!found.length) console.error(`research: ${model} returned no search results for "${area}"; tools used: ${msg?.executed_tools?.length ?? 0}`);
       return found;
+    };
+    const jobs = ctx.areas.slice(0, 3).map(async (area) => {
+      for (const model of models) {
+        try {
+          const found = await one(area, model);
+          if (found.length) return found;
+        } catch (e) { console.error("research failed:", e instanceof Error ? e.message : String(e)); }
+      }
+      return [] as Evidence[];
     });
-    const settled = await Promise.allSettled(jobs);
-    return settled.flatMap((s) => (s.status === "fulfilled" ? s.value : []));
+    return (await Promise.all(jobs)).flat();
   },
 };
 
@@ -105,7 +117,7 @@ export async function gatherEvidence(ctx: Ctx, today: string): Promise<{ evidenc
   const evidence: Evidence[] = [];
   let failed = 0;
   for (const r of results) {
-    if (r.status === "rejected") { failed++; continue; }
+    if (r.status === "rejected") { failed++; console.error("provider failed:", String(r.reason)); continue; }
     for (const e of r.value) {
       const key = e.url.split("#")[0];
       if (seen.has(key) || !e.snippet) continue;

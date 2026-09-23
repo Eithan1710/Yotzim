@@ -125,14 +125,16 @@ Deno.serve(async (req) => {
   try {
     const prefTags = Object.keys(ctx.preferences?.liked_tags ?? {}).slice(0, 6);
     const { evidence } = await gatherEvidence({ areas: ctx.areas, group_size: ctx.group_size, age: ctx.age, wish: ctx.wish, prefTags }, today);
-    if (!evidence.length) return send(200, { ok: false, error: "research" });
+    // no evidence is not fatal: the model may then only give general, unverified ideas (the app labels them)
 
     let result = shape(await groqJson(SYSTEM_PROMPT, buildUserPrompt(ctx, evidence, today)), evidence, today);
     if (result.recommendations.length && !hebrewOk(result)) {
       result = shape(await groqJson(SYSTEM_PROMPT, buildUserPrompt(ctx, evidence, today, true)), evidence, today);
     }
-    if (!result.recommendations.length || !hebrewOk(result)) return send(200, { ok: false, error: result.recommendations.length ? "groq" : "no_info" });
-    return send(200, { ok: true, ...result });
+    if (!result.recommendations.length || !hebrewOk(result)) {
+      return send(200, { ok: false, error: result.recommendations.length ? "groq" : (evidence.length ? "no_info" : "research") });
+    }
+    return send(200, { ok: true, researchOk: evidence.length > 0, ...result });
   } catch (e) {
     console.error("ai-suggest failed:", e instanceof Error ? e.message : "unknown"); // never returned to the client
     return send(200, { ok: false, error: "groq" });
