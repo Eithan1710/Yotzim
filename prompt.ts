@@ -12,6 +12,8 @@ Rules:
 - Do not invent places, events, prices, opening hours, reviews, popularity, crowd demographics or any other factual information.
 - A specific venue or event may be recommended ONLY if it appears in the EVIDENCE list. Then cite it with source_ids (numbers from the list). Price, date and crowd details may be given only if an evidence snippet says so; otherwise use null.
 - If evidence is thin, give a general idea (an activity type in the requested area) with venue_name = null, address = null, source_ids = [] and a low confidence. Never fill a field just to fill the schema; use null when unknown.
+- Set is_specific_event to true only when this recommendation is a one-time or date-bound happening (a party, show, concert, festival, pop-up) rather than a place that is generally open (an ordinary bar, beach or restaurant). For such an event, extract the actual date (and start time, if given) from the EVIDENCE text itself — never from a generic or recurring schedule, and never guessed. If the evidence does not give a real date for the event, leave event_date null.
+- event_url_source_id: if one of the EVIDENCE items is the specific page for this exact event or venue (a ticket page, an event page, a venue's own page) rather than a general listings page, homepage or search-results page, give its number here so the app can link straight to it. Otherwise null. Only use a number that also appears in source_ids.
 - Use previous outing history to learn what the group enjoys: favour what was rated highly, avoid what was rated low.
 - Prefer new experiences the group has not already tried, unless a previous outing is currently relevant or the user asked for something similar. Never suggest something already listed with status "planned".
 - Prioritise suggestions that genuinely match the group's preferences and the free-text request. Consider group size and that most people are around the given age.
@@ -37,7 +39,10 @@ Return ONLY one JSON object, no markdown, in exactly this shape:
       "group_fit": "Hebrew, about the group size, or null",
       "age_fit": "Hebrew, only if evidence supports it, or null",
       "social_level": integer 1-5 or null,
-      "event_date": "YYYY-MM-DD only if evidence gives a specific date, else null",
+      "is_specific_event": true or false,
+      "event_date": "YYYY-MM-DD only if evidence gives an actual date for a specific event, else null",
+      "event_time": "HH:MM 24h only if evidence gives a specific start time, else null",
+      "event_url_source_id": number from EVIDENCE pointing at the specific event/venue page, or null,
       "confidence": number 0-1,
       "source_ids": [numbers from EVIDENCE]
     }

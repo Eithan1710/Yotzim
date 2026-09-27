@@ -91,13 +91,16 @@ function cleanRec(r){
   const sources=(Array.isArray(r.sources)?r.sources:[]).map(s=>({url:clip(s&&s.url,500),label:clip(s&&s.label,40)}))
     .filter(s=>isHttp(s.url)).slice(0,5);
   const date=/^\d{4}-\d{2}-\d{2}$/.test(r.event_date||'')?r.event_date:null;
+  const time=date&&/^([01]\d|2[0-3]):[0-5]\d$/.test(r.event_time||'')?r.event_time:null;
+  const eventUrl=isHttp(r.event_url)?clip(r.event_url,500):null;
   return{
     name,kind:KIND_KEYS.includes(r.kind)?r.kind:'other',
     type:clip(r.type,30)||null,location:clip(r.location,80)||null,
     venue:clip(r.venue_name,80)||null,address:clip(r.address,120)||null,
     description:desc,why:clip(r.why_it_fits,260)||null,
     cost:clip(r.estimated_cost,50)||null,group:clip(r.group_fit,80)||null,age:clip(r.age_fit,80)||null,
-    social:num(r.social_level,1,5),confidence:num(r.confidence,0,1),date,
+    social:num(r.social_level,1,5),confidence:num(r.confidence,0,1),
+    isEvent:!!r.is_specific_event,date,time,eventUrl,
     verified:sources.length>0,sources
   };
 }
@@ -137,14 +140,21 @@ function navQuery(r){
   return '';
 }
 function moreInfoUrl(r){
+  if(r.eventUrl)return r.eventUrl;
   const first=r.sources.find(s=>!/instagram|facebook|tiktok/.test(s.url));
   return first?first.url:'https://www.google.com/search?q='+encodeURIComponent((r.venue||r.name)+' '+(r.location||''));
+}
+// Sets expectations correctly: an exact event page vs. just the site we found it on vs. a plain search
+function infoLabel(r){
+  if(r.eventUrl)return '🔗 לעמוד האירוע';
+  if(r.sources.length)return '🌐 המקור';
+  return '🔍 חיפוש בגוגל';
 }
 // What "Create outing" pre-fills in the existing form
 function toDraft(r){
   const place=clip(navQuery(r)?(r.venue||r.address):(r.name),60);
-  return{kind:r.kind,place,description:clip(r.description,500),date:r.date};
+  return{kind:r.kind,place,description:clip(r.description,500),date:r.date,time:r.time};
 }
 
-window.AIOuting={suggest,buildContext,sourceLabel,navQuery,moreInfoUrl,toDraft,AIError,MSG};
+window.AIOuting={suggest,buildContext,sourceLabel,navQuery,moreInfoUrl,infoLabel,toDraft,AIError,MSG};
 })();

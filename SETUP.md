@@ -17,4 +17,8 @@ supabase secrets set ALLOWED_ORIGINS=https://eithan1710.github.io
 
 ## 3. האתר
 מעלים ל-GitHub Pages: `index.html`, `script.js`, `style.css`, `sw.js`, `ai-service.js` (קובץ חדש).
-ה-service worker קיבל גרסה חדשה (`yotzim-v3`), אז הטלפונים יתעדכנו לבד.
+ה-service worker קיבל גרסה חדשה (`yotzim-v4`), אז הטלפונים יתעדכנו לבד.
+
+## עדכונים
+הריצו migrations חדשות לפי הסדר (v3 → v4 → v5 → v6) גם על מסד קיים; בטוח להריץ יותר מפעם אחת.
+`supabase-migration-v6.sql` מוסיף רשימת ציוד ליציאה, ונועל במסד את מחיקת היציאות שכבר עברו.

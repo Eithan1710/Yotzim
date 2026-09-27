@@ -64,7 +64,7 @@ function applyRsvpToRides(rides,name,st){
   out.forEach(r=>{r.passengers=r.passengers.filter(p=>p!==name)}); // a passenger who isn't coming: out of the car
   return out;
 }
-const RIDE_ERR={
+const RULE_ERR={
   YZ_ALREADY_PASSENGER:'אתה כבר נוסע ברכב של מישהו אחר',
   YZ_ALREADY_DRIVER:'אתה מוציא רכב ביציאה הזו',
   YZ_OWN_RIDE:'זה הרכב שלך',
@@ -72,7 +72,9 @@ const RIDE_ERR={
   YZ_RIDE_NOT_FOUND:'הרכב הזה כבר לא קיים',
   YZ_NOT_GOING:'רק מי שמגיע יכול להיות ברכב',
   YZ_ALREADY_IN_RIDE:'אתה כבר משובץ ברכב אחר',
-  YZ_SEATS_TAKEN:'יש ברכב יותר נוסעים ממספר המקומות'
+  YZ_SEATS_TAKEN:'יש ברכב יותר נוסעים ממספר המקומות',
+  YZ_ITEM_TAKEN:'הפריט הזה כבר משובץ למישהו אחר',
+  YZ_ITEM_NOT_FOUND:'הפריט הזה כבר לא קיים'
 };
 
 /* ---------- identity: just a name, kept in localStorage ---------- */
@@ -109,6 +111,12 @@ function cleanRatings(o){
   }
   return out;
 }
+function cleanEquipment(arr){
+  if(!Array.isArray(arr))return [];
+  return arr.map(x=>({id:String(x&&x.id),name:String((x&&x.name)||'').slice(0,60),
+    addedBy:x&&x.addedBy?String(x.addedBy):null,assignedTo:x&&x.assignedTo?String(x.assignedTo):null}))
+    .filter(x=>x.name).slice(0,60);
+}
 function setEvents(o,fresh){
   state.events=Object.entries(o).map(([id,v])=>{
     v=v||{};const rs=Object.create(null);
@@ -123,7 +131,7 @@ function setEvents(o,fresh){
     return{id:String(id),kind:has(KINDS,v.kind)?v.kind:'other',place:String(v.place||'').slice(0,80),when:Number(v.when)||0,
       transport:has(TRANSPORT,v.transport)?v.transport:'unknown',
       description:String(v.description||'').slice(0,500),by:v.by?String(v.by):null,
-      rsvps:rs,rides,ratings:cleanRatings(v.ratings)};
+      rsvps:rs,rides,ratings:cleanRatings(v.ratings),equipment:cleanEquipment(v.equipment)};
   }).filter(e=>e.when);
   // the group = everyone who has answered at least one outing
   const names=new Set();
@@ -139,7 +147,7 @@ let chain=Promise.resolve();
 function enqueue(fn){const p=chain.then(fn);chain=p.catch(()=>{});return p}
 function writeFail(e){
   const c=e&&e.code;
-  if(e&&e.msg&&RIDE_ERR[e.msg]){toast(RIDE_ERR[e.msg]);return}
+  if(e&&e.msg&&RULE_ERR[e.msg]){toast(RULE_ERR[e.msg]);return}
   if(e&&e.userMsg){toast(e.userMsg);return}
   toast(c==='forbidden'?'אין הרשאה. בדקו את ההגדרות ב-Supabase'
     :c==='conflict'?'השם הזה כבר תפוס'
@@ -165,9 +173,10 @@ function makeLocal(){
   const err=(msg,code)=>{const e=new Error(msg);e.code=code||'invalid';return e};
   const ridesOf=id=>data.events[id]&&Array.isArray(data.events[id].rides)?data.events[id].rides:(data.events[id]?(data.events[id].rides=[]):null);
   const rule=code=>{const e=err(code);e.msg=code;return e};
+  const equipOf=id=>data.events[id]&&Array.isArray(data.events[id].equipment)?data.events[id].equipment:(data.events[id]?(data.events[id].equipment=[]):null);
   return{
     subscribe(cb){onE=cb;emit()},
-    async addEvent(ev){const id=rid('e');data.events[id]={...ev,rides:[]};save();emit();return id},
+    async addEvent(ev){const id=rid('e');data.events[id]={...ev,rides:[],equipment:[]};save();emit();return id},
     async updateEvent(id,patch){const e=data.events[id];if(!e)throw err('not found');Object.assign(e,patch);save();emit()},
     async setRsvp(id,name,st){
       const e=data.events[id];if(!e)return;
@@ -225,7 +234,35 @@ function makeLocal(){
       const rs=ridesOf(eventId);if(!rs)return;
       const i=rs.findIndex(r=>r.id===rideId&&r.driver===driver);if(i>=0)rs.splice(i,1);
       save();emit();
-    }
+    },
+    async addEquipmentItem(eventId,name,addedBy){
+      const eq=equipOf(eventId);if(!eq)throw err('not found');
+      const trimmed=String(name||'').trim().slice(0,40);if(!trimmed)throw err('name required');
+      const id=rid('q');eq.push({id,name:trimmed,addedBy:addedBy||null,assignedTo:null});
+      save();emit();return id;
+    },
+    async addEquipmentItems(eventId,names,addedBy){
+      const eq=equipOf(eventId);if(!eq)throw err('not found');
+      (names||[]).forEach(n=>{const trimmed=String(n||'').trim().slice(0,40);if(trimmed&&eq.length<60)eq.push({id:rid('q'),name:trimmed,addedBy:addedBy||null,assignedTo:null})});
+      save();emit();
+    },
+    async removeEquipmentItem(eventId,itemId){
+      const eq=equipOf(eventId);if(!eq)return;
+      const i=eq.findIndex(x=>x.id===itemId);if(i>=0)eq.splice(i,1);
+      save();emit();
+    },
+    async claimEquipment(eventId,itemId,name){
+      const eq=equipOf(eventId);if(!eq)return;
+      const it=eq.find(x=>x.id===itemId);if(!it)throw rule('YZ_ITEM_NOT_FOUND');
+      if(it.assignedTo&&it.assignedTo!==name)throw rule('YZ_ITEM_TAKEN');
+      it.assignedTo=name;save();emit();
+    },
+    async unclaimEquipment(eventId,itemId,name){
+      const eq=equipOf(eventId);if(!eq)return;
+      const it=eq.find(x=>x.id===itemId);if(it&&it.assignedTo===name)it.assignedTo=null;
+      save();emit();
+    },
+    equipmentOk:()=>true
   };
 }
 
@@ -241,25 +278,31 @@ function makeSupabase(url,key){
       const e=new Error('http '+r.status);
       e.code=(r.status===401||r.status===403)?'forbidden':r.status===409?'conflict':'unavailable';
       // rule violations raised by the database (YZ_…) come back as the error message
-      try{const j=await r.json();if(j&&j.message){e.msg=String(j.message);if(RIDE_ERR[e.msg])e.code='rule'}}catch(_){}
+      try{const j=await r.json();if(j&&j.message){e.msg=String(j.message);if(RULE_ERR[e.msg])e.code='rule'}}catch(_){}
       throw e;
     }
     return(method==='GET'||(prefer&&prefer.indexOf('representation')>=0))?r.json():null;
   }
-  let cache={},onE,pending=0,lastSig=null,firstDone=false,ratingsAvail=true;
+  let cache={},onE,pending=0,lastSig=null,firstDone=false,ratingsAvail=true,equipmentAvail=true;
   const emit=()=>onE(cache,firstDone);
   const findRide=(eventId,rideId)=>{const e=cache[eventId];return e?e.rides.find(r=>String(r.id)===String(rideId)):null};
+  const findEquip=(eventId,itemId)=>{const e=cache[eventId];return e?e.equipment.find(x=>String(x.id)===String(itemId)):null};
   async function pull(){
     if(pending)return;
     const since=new Date(Date.now()-60*864e5);
-    // ratings live in their own request: if supabase-migration-v5.sql wasn't run yet, the board still works without them
+    // ratings and equipment each live in their own request: if the matching migration wasn't run yet, the board still works without them
     const ratingsP=api('GET','outing_ratings?select=event_id,rater_name,stars,comment').catch(()=>null);
+    const equipP=api('GET','equipment_items?select=id,event_id,name,added_by,assigned_to').catch(()=>null);
     const rows=await api('GET','events?select=*,participants(name,status),rides(id,driver_name,available_seats,pickup_location,note,ride_passengers(passenger_name))&date=gte.'+iso(since)+'&order=date.asc,time.asc');
     if(pending)return;
     const rr=await ratingsP;
     ratingsAvail=rr!==null;
     const rmap={};
     (rr||[]).forEach(x=>{(rmap[x.event_id]||(rmap[x.event_id]=Object.create(null)))[x.rater_name]={stars:x.stars,comment:x.comment||''}});
+    const eq=await equipP;
+    equipmentAvail=eq!==null;
+    const emap={};
+    (eq||[]).forEach(x=>{(emap[x.event_id]||(emap[x.event_id]=[])).push({id:x.id,name:x.name,addedBy:x.added_by||null,assignedTo:x.assigned_to||null})});
     const events={};
     rows.forEach(e=>{
       const [y,m,d]=String(e.date).split('-').map(Number),[hh,mm]=String(e.time).split(':').map(Number);
@@ -268,7 +311,7 @@ function makeSupabase(url,key){
       const rides=(e.rides||[]).map(r=>({id:r.id,driver:r.driver_name,seats:r.available_seats,
         pickup:r.pickup_location||'',note:r.note||'',passengers:(r.ride_passengers||[]).map(p=>p.passenger_name)}));
       events[e.id]={kind:kindFromLabel(e.type),place:e.title||e.location,when:new Date(y,m-1,d,hh,mm).getTime(),
-        transport:trFromLabel(e.transport),description:e.description||'',by:e.created_by||null,rsvps:rs,rides,ratings:rmap[e.id]||{}};
+        transport:trFromLabel(e.transport),description:e.description||'',by:e.created_by||null,rsvps:rs,rides,ratings:rmap[e.id]||{},equipment:emap[e.id]||[]};
     });
     firstDone=true;
     const sig=JSON.stringify(events);
@@ -339,12 +382,29 @@ function makeSupabase(url,key){
       ride.passengers.push(name);ev.rsvps[name]='yes';
     },async()=>{
       try{await api('POST','rpc/join_ride',{p_ride_id:Number(rideId),p_passenger:name,p_switch:!!sw})}
-      catch(e){if(!e.msg||!RIDE_ERR[e.msg])e.userMsg='לא הצלחנו להצטרף לרכב. נסו שוב';throw e}
+      catch(e){if(!e.msg||!RULE_ERR[e.msg])e.userMsg='לא הצלחנו להצטרף לרכב. נסו שוב';throw e}
     }),
     leaveRide:(eventId,rideId,name)=>write(()=>{const r=findRide(eventId,rideId);if(r)r.passengers=r.passengers.filter(p=>p!==name)},
       ()=>api('POST','rpc/leave_ride',{p_ride_id:Number(rideId),p_passenger:name})),
     deleteRide:(eventId,rideId,driver)=>write(()=>{const e=cache[eventId];if(e)e.rides=e.rides.filter(r=>String(r.id)!==String(rideId))},
-      ()=>api('DELETE','rides?id=eq.'+encodeURIComponent(rideId)+'&driver_name=eq.'+encodeURIComponent(driver)))
+      ()=>api('DELETE','rides?id=eq.'+encodeURIComponent(rideId)+'&driver_name=eq.'+encodeURIComponent(driver))),
+    equipmentOk:()=>equipmentAvail,
+    addEquipmentItem:(eventId,name,addedBy)=>write(null,()=>
+      api('POST','equipment_items',{event_id:Number(eventId),name,added_by:addedBy||null},'return=minimal')),
+    addEquipmentItems:(eventId,names,addedBy)=>write(null,()=>{
+      const rows=(names||[]).map(n=>String(n||'').trim().slice(0,40)).filter(Boolean)
+        .map(n=>({event_id:Number(eventId),name:n,added_by:addedBy||null}));
+      return rows.length?api('POST','equipment_items',rows,'return=minimal'):null;
+    }),
+    removeEquipmentItem:(eventId,itemId)=>write(()=>{const e=cache[eventId];if(e)e.equipment=e.equipment.filter(x=>String(x.id)!==String(itemId))},
+      ()=>api('DELETE','equipment_items?id=eq.'+encodeURIComponent(itemId))),
+    claimEquipment:(eventId,itemId,name)=>write(()=>{const it=findEquip(eventId,itemId);if(it)it.assignedTo=name},
+      async()=>{
+        try{await api('POST','rpc/claim_equipment',{p_item_id:Number(itemId),p_name:name})}
+        catch(e){if(!e.msg||!RULE_ERR[e.msg])e.userMsg='לא הצלחנו לשבץ את הפריט. נסו שוב';throw e}
+      }),
+    unclaimEquipment:(eventId,itemId,name)=>write(()=>{const it=findEquip(eventId,itemId);if(it&&it.assignedTo===name)it.assignedTo=null},
+      ()=>api('POST','rpc/unclaim_equipment',{p_item_id:Number(itemId),p_name:name}))
   };
 }
 async function makeStore(){
@@ -567,8 +627,23 @@ function card(ev){
     </div>${action}</article>`;
 }
 function prow(ev){
-  const k=KINDS[ev.kind],g=groups(ev);
-  return `<button class="prow" data-act="open" data-id="${esc(ev.id)}"><span class="pt">${k.e} ${esc(ev.place)} — ${ddmm(new Date(ev.when))}</span><span class="pc">${g.yes.length} הגיעו</span></button>`;
+  const k=KINDS[ev.kind],g=groups(ev),d=new Date(ev.when);
+  const went=!!(me&&ev.rsvps[myId()]==='yes');
+  const ratingsOn=!store||!store.ratingsOk||store.ratingsOk();
+  const rs=Object.values(ev.ratings||{}),n=rs.length,mean=n?Math.round(rs.reduce((t,r)=>t+r.stars,0)/n*10)/10:null;
+  const myRated=!!(me&&ev.ratings[me.id]);
+  const cta=(ratingsOn&&went&&!myRated)
+    ?`<button class="prate" data-act="open" data-id="${esc(ev.id)}">⭐ דרגו</button>`
+    :(mean?`<span class="pravg">⭐ ${mean}</span>`:'');
+  return `<article class="pcard">
+    <div class="info" data-act="open" data-id="${esc(ev.id)}" role="button" tabindex="0">
+      <span class="ptile" aria-hidden="true">${k.e}</span>
+      <div class="pctxt">
+        <div class="ptop"><span class="pplace">${esc(ev.place)}</span><span class="pbadge">🕘 עבר</span></div>
+        <div class="pwhen">${DAYS[d.getDay()]} · ${ddmm(d)} · ${hhmm(d)}</div>
+        <div class="pfoot">${avatars(g.yes)}<span class="pgtxt">${g.yes.length?g.yes.length+' הגיעו':'אף אחד לא סימן שהגיע'}</span></div>
+      </div>
+    </div>${cta}</article>`;
 }
 const head=()=>'<header class="top"><h1 class="brand">יוצאים?</h1>'+
   (me?`<button class="who" data-act="rename" aria-label="שינוי שם">👤 ${esc(me.name)}</button>`:'')+'</header>';
@@ -584,7 +659,7 @@ function render(){
   const now=Date.now();
   const up=state.events.filter(e=>e.when+PAST_AFTER>=now).sort((a,b)=>a.when-b.when);
   const past=state.events.filter(e=>e.when+PAST_AFTER<now).sort((a,b)=>b.when-a.when).slice(0,15);
-  let h=head()+installUI()+'<h2 class="sec">🔥 קרוב</h2>';
+  let h=head()+installUI()+aiCardHTML()+'<h2 class="sec">🔥 קרוב</h2>';
   if(!up.length){
     h+='<div class="empty-state">אין יציאות קרובות.<br>לחצו על ״+ יציאה״ ופתחו את הראשונה.</div>';
   }else{
@@ -819,6 +894,54 @@ function openBlocked(eventId,kind,rideId){
   openSheet(html);view={type:'blocked',id:eventId};
 }
 
+/* ---------- equipment: a simple packing list, one assignee per item ---------- */
+function equipmentHTML(ev,isPast){
+  const items=ev.equipment||[];
+  const canManage=!isPast&&!!(me&&(!ev.by||ev.by===me.id));
+  if(isPast&&!items.length)return '';   // nothing to show in history if nobody listed anything
+  let h='<div class="grp equip"><div class="gh">🎒 ציוד</div>';
+  if(!items.length){
+    h+='<p class="dash" style="margin:2px 0 0">עדיין אין רשימת ציוד.</p>';
+  }else{
+    h+='<div class="eqlist">'+items.map(it=>{
+      const mine=!!(me&&it.assignedTo===me.id),taken=!!it.assignedTo;
+      let action;
+      if(isPast)action=taken?`<span class="eqwho">${esc(it.assignedTo)} הביא/א</span>`:'<span class="eqwho dash">לא שובץ</span>';
+      else if(mine)action=`<button class="eqbtn mine" data-act="equip-unclaim" data-id="${esc(ev.id)}" data-item="${esc(it.id)}">✓ אתה מביא · הסר</button>`;
+      else if(taken)action=`<span class="eqwho">${esc(it.assignedTo)} מביא</span>`;
+      else action=`<button class="eqbtn" data-act="equip-claim" data-id="${esc(ev.id)}" data-item="${esc(it.id)}">אני אביא</button>`;
+      const rm=canManage?`<button class="pillx" data-act="equip-del" data-id="${esc(ev.id)}" data-item="${esc(it.id)}" aria-label="מחק את ${esc(it.name)}">🗑️</button>`:'';
+      return `<div class="eqitem${taken?' taken':''}">
+        <span class="eqname">${taken?'✅':'⚪'} ${esc(it.name)}</span>
+        <span class="eqact">${action}${rm}</span>
+      </div>`;
+    }).join('')+'</div>';
+  }
+  if(canManage){
+    h+=`<div class="dtrow" style="margin-top:12px"><input class="txt" id="eq-new" maxlength="40" placeholder="הוסיפו פריט…" autocomplete="off" enterkeyhint="done" aria-label="פריט ציוד חדש"><button class="ch" data-act="equip-add-live" data-id="${esc(ev.id)}">+ הוסף</button></div>`;
+  }
+  h+='</div>';
+  return h;
+}
+function claimEquip(eventId,itemId){
+  if(!me)return;
+  enqueue(()=>store.claimEquipment(eventId,itemId,me.id)).then(()=>toast('רשמנו אותך על הפריט ✓')).catch(writeFail);
+}
+function unclaimEquip(eventId,itemId){
+  if(!me)return;
+  enqueue(()=>store.unclaimEquipment(eventId,itemId,me.id)).then(()=>toast('הוסר')).catch(writeFail);
+}
+function delEquip(eventId,itemId){
+  enqueue(()=>store.removeEquipmentItem(eventId,itemId)).then(()=>toast('הפריט הוסר')).catch(writeFail);
+}
+function addEquipLive(eventId){
+  if(!me)return;
+  const inp=$('#eq-new');if(!inp)return;
+  const v=inp.value.trim().slice(0,40);if(!v)return;
+  inp.value='';
+  enqueue(()=>store.addEquipmentItem(eventId,v,me.id)).then(()=>toast('הפריט נוסף ✓')).catch(writeFail);
+}
+
 const delBtn=ev=>`<button class="del" data-act="del" data-id="${esc(ev.id)}">🗑️ מחק יציאה</button>`;
 function detailHTML(ev){
   const k=KINDS[ev.kind],g=groups(ev),my=ev.rsvps[myId()],d=new Date(ev.when);
@@ -831,11 +954,12 @@ function detailHTML(ev){
   if(!isPast)h+=shareBtn(ev)+`<div class="actrow">${navBtn(ev)}${calBtn(ev)}</div>`;
   if(ev.description)h+=`<p class="descr">${esc(ev.description)}</p>`;
   if(isPast){
-    h+=grp('yes','🟢','הגיעו',g.yes)+ratingHTML(ev)+delBtn(ev)+'<div class="pad"></div>';
+    // a past outing is locked in: no delete option, anywhere in this sheet
+    h+=grp('yes','🟢','הגיעו',g.yes)+equipmentHTML(ev,true)+ratingHTML(ev)+'<div class="pad"></div>';
   }else{
     h+=grp('yes','🟢','מגיעים',g.yes)+grp('maybe','🟡','אולי',g.maybe)
       +grp('none','⚪','עדיין לא ענו',g.none)+grp('no','🔴','לא מגיעים',g.no)
-      +ridesHTML(ev)
+      +ridesHTML(ev)+equipmentHTML(ev,false)
       +(canEdit?`<button class="edit" data-act="edit" data-id="${esc(ev.id)}">✏️ ערוך יציאה</button>`:'')
       +delBtn(ev)
       +`<div class="rsvpbar">${btns(ev,my,'sb','לא מגיע')}</div>`;
@@ -867,7 +991,8 @@ function openForm(editEv,draft){
   form={editId:editing?editEv.id:null,
     kind:editing?editEv.kind:(draft?draft.kind:null),
     transport:editing?editEv.transport:(has(TRANSPORT,LS.get('yotz.tr'))?LS.get('yotz.tr'):'unknown'),
-    dm:editing?dayModeOf(editEv.when):(d.getDate()===new Date().getDate()?'today':'tomorrow')};
+    dm:editing?dayModeOf(editEv.when):(d.getDate()===new Date().getDate()?'today':'tomorrow'),
+    equipment:[]};
   if(draft&&draft.date&&draft.date>=iso(new Date()))form.dm='custom';   // an event with a real date: start from it
   const kinds=Object.entries(KINDS).map(([k,v])=>`<button class="opt" data-act="kind" data-v="${k}"><span class="e">${v.e}</span>${v.t}</button>`).join('');
   const trs=Object.entries(TRANSPORT).map(([k,v])=>`<button class="ch" data-act="tr" data-v="${k}">${v.e} ${v.t}</button>`).join('');
@@ -889,6 +1014,9 @@ function openForm(editEv,draft){
       <div class="fl">איך מגיעים?</div><div class="row">${trs}</div>
       <div class="fl">תיאור (לא חובה)</div>
       <textarea class="txt area" id="f-descr" maxlength="500" placeholder="נפגשים ב-21:30 אצל דניאל, משם ממשיכים לבר…">${editing?esc(editEv.description||''):(draft?esc(draft.description||''):'')}</textarea>
+      ${editing?'':`<div class="fl">ציוד לקחת (לא חובה)</div>
+      <div class="dtrow"><input class="txt" id="f-equip" maxlength="40" placeholder="לדוגמה: אוהל" autocomplete="off" enterkeyhint="done"><button class="ch" data-act="equip-add">+ הוסף</button></div>
+      <div class="row equip-row" id="f-equip-list" style="margin-top:8px">${equipChips(form.equipment)}</div>`}
       <div class="formbar">
         ${editing?'<button class="cancel" data-act="close">ביטול</button>':''}
         <button class="submit" id="f-submit" data-act="submit" disabled>${editing?'שמור':'צור יציאה'}</button>
@@ -898,7 +1026,7 @@ function openForm(editEv,draft){
   $('#f-time').value=hhmm(d);
   $('#f-date').min=iso(new Date());
   if(editing&&form.dm==='custom')$('#f-date').value=iso(d);
-  else if(draft&&form.dm==='custom'){$('#f-date').value=draft.date;$('#f-time').value='21:00'}
+  else if(draft&&form.dm==='custom'){$('#f-date').value=draft.date;$('#f-time').value=draft.time||'21:00'}
   syncForm();
 }
 function syncForm(){
@@ -909,6 +1037,24 @@ function syncForm(){
   mark('kind',form.kind);mark('dm',form.dm);mark('tr',form.transport);mark('tm',$('#f-time').value);
   $('#f-date').hidden=form.dm!=='custom';
   $('#f-submit').disabled=!(form.kind&&(form.kind!=='other'||$('#f-place').value.trim()));
+}
+function equipChips(list){
+  return list.length
+    ?list.map((n,i)=>`<span class="ch equip-chip">${esc(n)}<button class="pillx" data-act="equip-rm" data-i="${i}" aria-label="הסר את ${esc(n)}">✕</button></span>`).join('')
+    :'<span class="dash">אין פריטים עדיין</span>';
+}
+function addEquipDraft(){
+  if(!form)return;
+  const inp=$('#f-equip');if(!inp)return;
+  const v=inp.value.trim().slice(0,40);if(!v)return;
+  if(form.equipment.length>=20){toast('עד 20 פריטים');return}
+  form.equipment.push(v);inp.value='';
+  const list=$('#f-equip-list');if(list)list.innerHTML=equipChips(form.equipment);
+}
+function rmEquipDraft(i){
+  if(!form)return;
+  form.equipment.splice(i,1);
+  const list=$('#f-equip-list');if(list)list.innerHTML=equipChips(form.equipment);
 }
 function submitForm(){
   if(!form||!form.kind)return;
@@ -934,9 +1080,11 @@ function submitForm(){
       .then(()=>toast('היציאה עודכנה')).catch(writeFail);
   }else{
     const ev={kind:form.kind,place,when,transport:form.transport,description,by:me.id,rsvps:{[me.id]:'yes'}};
+    const equipToAdd=form.equipment.slice();
     closeSheet();
     enqueue(()=>store.addEvent(ev)).then(id=>{
       celebrate();
+      if(equipToAdd.length&&store.addEquipmentItems)enqueue(()=>store.addEquipmentItems(id,equipToAdd,me.id)).catch(()=>{});
       // the moment to bring the group in: offer to share right away (only if nothing else was opened meanwhile)
       const created=id&&state.events.find(e=>e.id===String(id));
       if(created&&!sheetEl)openShareSheet(created,true);else toast('היציאה נוצרה 🎉');
@@ -1045,6 +1193,8 @@ function saveRename(){
   }).catch(writeFail);
 }
 function deleteEvent(el){
+  const ev0=state.events.find(e=>e.id===el.dataset.id);
+  if(ev0&&ev0.when+PAST_AFTER<Date.now()){toast('אי אפשר למחוק יציאה שכבר עברה');return}
   if(!el.dataset.armed){
     el.dataset.armed='1';el.classList.add('armed');el.textContent='בטוחים? לחצו שוב למחיקה';
     setTimeout(()=>{if(el.isConnected){delete el.dataset.armed;el.classList.remove('armed');el.textContent='🗑️ מחק יציאה'}},4000);
@@ -1063,7 +1213,7 @@ function setRsvp(id,s){
   // Only "going" people can be in a car: anything else takes them out (the store + database do it; we just say so)
   const role=s!=='yes'?rideRole(ev,me.id):null;
   tapped=id+'|'+s;setTimeout(()=>{tapped=null},700);
-  if(s==='yes')celebrate();
+  if(s==='yes'){celebrate();toast('נרשמת ✓ מצפים לראותך!')}
   enqueue(()=>store.setRsvp(id,me.id,s)).then(()=>{
     if(!role)return;
     if(role.type==='passenger')toast('יצאת מהרכב של '+role.ride.driver);
@@ -1130,6 +1280,7 @@ function rateStars(id,v){
   const comment=(ta?ta.value:(ratingDraft&&ratingDraft.id===id?ratingDraft.comment:((ev.ratings[me.id]||{}).comment||''))).trim();
   ratingDraft={id,stars:v,comment};
   celebrate();
+  toast('דירוג נשמר ✓');
   enqueue(()=>store.setRating(id,me.id,v,comment)).then(()=>{ratingDraft=null})
     .catch(e=>{ratingDraft=null;writeFail(e);refreshSheet()});
 }
@@ -1140,7 +1291,8 @@ function saveComment(id){
   const stars=ratingDraft&&ratingDraft.id===id?ratingDraft.stars:(my?my.stars:0);
   if(!stars){toast('בחרו כוכבים קודם');return}
   const ta=$('#r-comment'),comment=(ta?ta.value:'').trim();
-  enqueue(()=>store.setRating(id,me.id,stars,comment)).then(()=>{ratingDraft=null;toast('נשמר, תודה!')}).catch(writeFail);
+  toast('ההערה נשמרה, תודה! ✓');
+  enqueue(()=>store.setRating(id,me.id,stars,comment)).then(()=>{ratingDraft=null;refreshSheet()}).catch(writeFail);
 }
 
 /* ---------- ✨ AI suggestions (UI only; the logic is in ai-service.js, the Groq key is in the Edge Function) ---------- */
@@ -1171,6 +1323,15 @@ function aiFormHTML(){
     <textarea class="txt area" id="ai-wish" maxlength="400" placeholder="משהו חברתי, עם הרבה אנשים, מוזיקה ואווירה טובה">${esc(aiForm.wish)}</textarea>
     <button class="prefslink" data-act="prefs-open">⚙️ ההעדפות שלי</button>
     <div class="formbar"><button class="submit" id="ai-go" data-act="ai-go"${aiForm.areas.length?'':' disabled'}>✨ תנו לי רעיונות</button></div>`;
+}
+// A hard-to-miss entry point on the main screen (the old hint inside the "new outing" form stays too)
+function aiCardHTML(){
+  if(!(state.ready&&me&&AI&&state.mode==='supabase'))return '';
+  return `<button class="aicard" data-act="ai-open">
+    <span class="aic-ic" aria-hidden="true">✨</span>
+    <span class="aic-txt"><span class="aic-t">מצאו רעיון ליציאה עם AI</span><span class="aic-s">ספרו לנו מה בא לכם, ונציע יציאות בזמן אמת</span></span>
+    <span class="aic-arrow" aria-hidden="true">‹</span>
+  </button>`;
 }
 function openAI(){
   if(!state.ready||!me||!AI){toast('רגע, הלוח נטען');return}
@@ -1242,10 +1403,11 @@ const chip=(e,t)=>`<span class="rchip">${e} ${esc(t)}</span>`;
 function recCard(r,i){
   const k=KINDS[r.kind]||KINDS.other;
   const q=AI.navQuery(r);
-  let date='';
-  if(r.date){const [y,m,d]=r.date.split('-').map(Number);date=ddmm(new Date(y,m-1,d))}
+  let dateChip='';
+  if(r.date){const [y,m,d]=r.date.split('-').map(Number);dateChip=chip('📅',ddmm(new Date(y,m-1,d))+(r.time?' · '+r.time:''))}
+  else if(r.isEvent)dateChip='<span class="rchip warn">📅 תאריך לא אומת</span>';
   const chips=(r.cost?chip('💰',r.cost):'')+(r.group?chip('👥',r.group):'')+(r.age?chip('🎂',r.age):'')
-    +(r.social!=null?chip('🔥','רמה חברתית '+r.social+'/5'):'')+(date?chip('📅',date):'')
+    +(r.social!=null?chip('🔥','רמה חברתית '+r.social+'/5'):'')+dateChip
     +(r.verified?'':'<span class="rchip warn">רעיון כללי, לא אומת</span>');
   const labels=[...new Set(r.sources.map(s=>AI.sourceLabel(s)))];
   const src=r.sources.length
@@ -1256,7 +1418,7 @@ function recCard(r,i){
     <p class="rdesc">${esc(r.description)}</p>
     ${r.why?`<div class="rwhy"><b>למה זה מתאים לכם</b>${esc(r.why)}</div>`:''}
     ${chips?`<div class="rchips">${chips}</div>`:''}${src}
-    <div class="actrow">${q?`<button class="actbtn" data-act="ai-nav" data-i="${i}">📍 נווט</button>`:''}<a class="actbtn" href="${esc(safeHref(AI.moreInfoUrl(r)))}" target="_blank" rel="noopener noreferrer">🌐 מידע נוסף</a></div>
+    <div class="actrow">${q?`<button class="actbtn" data-act="ai-nav" data-i="${i}">📍 נווט</button>`:''}<a class="actbtn" href="${esc(safeHref(AI.moreInfoUrl(r)))}" target="_blank" rel="noopener noreferrer">${AI.infoLabel(r)}</a></div>
     <button class="rcreate" data-act="ai-create" data-i="${i}">➕ צור יציאה</button>
   </article>`;
 }
@@ -1365,6 +1527,12 @@ document.addEventListener('click',e=>{
   else if(a==='prefs-open')openPrefs();
   else if(a==='pref-tag')togglePrefTag(el.dataset.v,el);
   else if(a==='pref-save')savePrefs();
+  else if(a==='equip-add'){e.preventDefault();addEquipDraft()}
+  else if(a==='equip-rm')rmEquipDraft(Number(el.dataset.i));
+  else if(a==='equip-claim')claimEquip(id,el.dataset.item);
+  else if(a==='equip-unclaim')unclaimEquip(id,el.dataset.item);
+  else if(a==='equip-del')delEquip(id,el.dataset.item);
+  else if(a==='equip-add-live')addEquipLive(id);
 });
 document.addEventListener('input',e=>{
   const t=e.target.id;
@@ -1383,6 +1551,8 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&e.target.id==='r-name'){e.preventDefault();saveRename()}
   if(e.key==='Enter'&&e.target.id==='f-place'){e.preventDefault();e.target.blur()}
   if(e.key==='Enter'&&e.target.id==='ai-area-in'){e.preventDefault();addArea()}
+  if(e.key==='Enter'&&e.target.id==='f-equip'){e.preventDefault();addEquipDraft()}
+  if(e.key==='Enter'&&e.target.id==='eq-new'){e.preventDefault();if(view&&view.type==='detail')addEquipLive(view.id)}
   if((e.key==='Enter'||e.key===' ')&&e.target.getAttribute&&e.target.getAttribute('role')==='button'){e.preventDefault();e.target.click()}
 });
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)render()});

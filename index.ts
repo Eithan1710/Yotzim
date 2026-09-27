@@ -76,6 +76,9 @@ function shape(raw: any, evidence: { url: string }[], today: string) {
     const sources = ids.slice(0, 5).map((i) => ({ url: evidence[i - 1].url }));
     const verified = sources.length > 0;
     const date = /^\d{4}-\d{2}-\d{2}$/.test(r?.event_date ?? "") && r.event_date >= today && r.event_date <= max ? r.event_date : null;
+    const time = date && /^([01]\d|2[0-3]):[0-5]\d$/.test(r?.event_time ?? "") ? r.event_time : null;
+    const urlId = Number(r?.event_url_source_id);
+    const eventUrl = verified && Number.isInteger(urlId) && ids.includes(urlId) ? evidence[urlId - 1].url : null;
     return {
       name: s(r?.name, 70), kind: KINDS.includes(r?.kind) ? r.kind : "other", type: s(r?.type, 30),
       location: s(r?.location, 80),
@@ -86,7 +89,10 @@ function shape(raw: any, evidence: { url: string }[], today: string) {
       estimated_cost: verified && r?.estimated_cost ? s(r.estimated_cost, 50) : null,
       group_fit: r?.group_fit ? s(r.group_fit, 80) : null, age_fit: verified && r?.age_fit ? s(r.age_fit, 80) : null,
       social_level: r?.social_level == null ? null : n(r.social_level, 1, 5, 3),
+      is_specific_event: !!r?.is_specific_event,
       event_date: verified ? date : null,
+      event_time: verified ? time : null,
+      event_url: eventUrl,
       confidence: Math.min(verified ? 1 : 0.4, Math.max(0, Number(r?.confidence) || 0)),
       sources,
     };
