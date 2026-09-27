@@ -8,7 +8,8 @@ import { buildUserPrompt, KINDS, SYSTEM_PROMPT } from "./prompt.ts";
 
 const ORIGINS = (Deno.env.get("ALLOWED_ORIGINS") ??
   "https://eithan1710.github.io,capacitor://localhost,https://localhost,http://localhost").split(",").map((s) => s.trim());
-const MODEL = Deno.env.get("GROQ_MODEL") ?? "llama-3.3-70b-versatile";
+// llama-3.3-70b-versatile was deprecated by Groq on 2026-08-16 — openai/gpt-oss-120b is the default now
+const MODEL = Deno.env.get("GROQ_MODEL") ?? "openai/gpt-oss-120b";
 const HEBREW = /[\u0590-\u05FF]/;
 
 /* ---------- tiny per-instance rate limit (best effort) ---------- */
@@ -56,7 +57,7 @@ async function groqJson(system: string, user: string) {
     signal: AbortSignal.timeout(40_000),
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("GROQ_API_KEY")}` },
     body: JSON.stringify({
-      model: MODEL, temperature: 0.4, max_tokens: 3500,
+      model: MODEL, temperature: 0.4, max_tokens: 3500, reasoning_effort: "low",
       response_format: { type: "json_object" },
       messages: [{ role: "system", content: system }, { role: "user", content: user }],
     }),

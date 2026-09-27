@@ -26,27 +26,31 @@ function collect(node: unknown, out: Evidence[], depth = 0) {
   for (const k of Object.keys(o)) if (typeof o[k] === "object") collect(o[k], out, depth + 1);
 }
 
-/* ---- Provider 1: Groq Compound (built-in web search; needs only the Groq key) ---- */
-const groqCompound: Provider = {
-  name: "groq-compound",
+/* ---- Provider 1: openai/gpt-oss-120b with the built-in browser_search tool (needs only the Groq key) ----
+   groq/compound and groq/compound-mini were decommissioned by Groq on 2026-09-21; there is no drop-in
+   replacement model id, so this calls the underlying reasoning model directly with its own web tool. */
+const groqBrowserSearch: Provider = {
+  name: "groq-browser-search",
   enabled: () => !!Deno.env.get("GROQ_API_KEY"),
   async research(ctx, today) {
-    // if the full system fails (rate limit, timeout, no access) the lighter one gets a try
-    const models = [Deno.env.get("GROQ_RESEARCH_MODEL") ?? "groq/compound", "groq/compound-mini"];
+    const model = Deno.env.get("GROQ_RESEARCH_MODEL") ?? "openai/gpt-oss-120b";
     // one search per area, in parallel, so a big area doesn't drown a small one
-    const one = async (area: string, model: string) => {
+    const one = async (area: string) => {
       const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
         signal: AbortSignal.timeout(70_000),
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("GROQ_API_KEY")}` },
         body: JSON.stringify({
           model,
-          temperature: 0.2,
+          reasoning_effort: "low",   // browser sessions get expensive fast at higher effort; low is plenty for this
+          tool_choice: "required",
+          tools: [{ type: "browser_search" }],
+          citation_options: "enabled",
           messages: [
             {
               role: "system",
               content:
-                "You are a research assistant. Use web search (search in Hebrew and in English) to find CURRENT, real information. " +
+                "You are a research assistant. Use browser search (search in Hebrew and in English) to find CURRENT, real information. " +
                 "Only report what you actually found. Never guess. Keep the final answer to a short list.",
             },
             {
@@ -63,21 +67,24 @@ const groqCompound: Provider = {
       });
       if (!r.ok) throw new Error(`${model} HTTP ${r.status}: ${clip(await r.text(), 300)}`);
       const j = await r.json();
-      const found: Evidence[] = [];
       const msg = j?.choices?.[0]?.message;
-      collect(msg?.executed_tools, found);
-      if (!found.length) collect(msg, found);   // the shape differs between versions: look everywhere in the message
-      if (!found.length) console.error(`research: ${model} returned no search results for "${area}"; tools used: ${msg?.executed_tools?.length ?? 0}`);
+      const content: string = typeof msg?.content === "string" ? msg.content : "";
+      // Each url_citation annotation points at the exact span of the answer it backs — use that span as the snippet
+      const found: Evidence[] = (Array.isArray(msg?.annotations) ? msg.annotations : [])
+        .filter((a: any) => a?.type === "url_citation" && isHttp(a?.url_citation?.url))
+        .map((a: any) => {
+          const c = a.url_citation;
+          const span = (typeof c.start_index === "number" && typeof c.end_index === "number")
+            ? content.slice(c.start_index, c.end_index) : "";
+          return { title: clip(c.title, 120), url: c.url as string, snippet: clip(span || content, 600) };
+        });
+      if (!found.length) collect(msg?.executed_tools, found);  // fall back to whatever shape the tool call actually returned
+      if (!found.length) console.error(`research: ${model} returned no citations for "${area}"; tools used: ${msg?.executed_tools?.length ?? 0}`);
       return found;
     };
     const jobs = ctx.areas.slice(0, 3).map(async (area) => {
-      for (const model of models) {
-        try {
-          const found = await one(area, model);
-          if (found.length) return found;
-        } catch (e) { console.error("research failed:", e instanceof Error ? e.message : String(e)); }
-      }
-      return [] as Evidence[];
+      try { return await one(area); }
+      catch (e) { console.error("research failed:", e instanceof Error ? e.message : String(e)); return [] as Evidence[]; }
     });
     return (await Promise.all(jobs)).flat();
   },
@@ -108,7 +115,7 @@ const tavily: Provider = {
   },
 };
 
-const PROVIDERS: Provider[] = [groqCompound, tavily];
+const PROVIDERS: Provider[] = [groqBrowserSearch, tavily];
 
 export async function gatherEvidence(ctx: Ctx, today: string): Promise<{ evidence: Evidence[]; failed: number }> {
   const active = PROVIDERS.filter((p) => p.enabled());
