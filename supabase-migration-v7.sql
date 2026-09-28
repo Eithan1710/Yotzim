@@ -82,6 +82,9 @@ $$ select exists (
                   where g.event_id = e.id and m.member_name = current_name())
      )) $$;
 
+-- Supabase auto-grants EXECUTE to anon (and PUBLIC) on every new function; revoke that explicitly —
+-- these RPCs must only ever be callable by a signed-in (even anonymously-authenticated) session.
+revoke execute on function current_name(), is_group_member(uuid), can_see_event(bigint) from public, anon;
 grant execute on function current_name(), is_group_member(uuid), can_see_event(bigint) to authenticated;
 
 -- ---------------------------------------------------------------------------
@@ -189,6 +192,8 @@ create or replace function leave_group(p_group uuid) returns void
 language sql security definer set search_path = public as
 $$ delete from group_members where group_id = p_group and member_name = current_name() $$;
 
+revoke execute on function claim_profile(text), get_recovery_code(), recover_profile(text, text), rename_profile(text),
+  set_avatar(text), clear_avatar(), create_group(text), group_preview(text), join_group(text), leave_group(uuid) from public, anon;
 grant execute on function claim_profile(text), get_recovery_code(), recover_profile(text, text), rename_profile(text),
   set_avatar(text), clear_avatar(), create_group(text), group_preview(text), join_group(text), leave_group(uuid) to authenticated;
 
@@ -364,6 +369,28 @@ create policy "avatars own update" on storage.objects for update to authenticate
   using (bucket_id = 'avatars' and name = auth.uid()::text || '.jpg');
 create policy "avatars own delete" on storage.objects for delete to authenticated
   using (bucket_id = 'avatars' and name = auth.uid()::text || '.jpg');
+
+-- ---------------------------------------------------------------------------
+-- 10) ניקוי: הרשאות ישנות ל-anon על פונקציות שקיימות עוד מ-v3/v4/v6, ו-search_path קבוע
+-- ---------------------------------------------------------------------------
+-- v3/v4/v6 העניקו EXECUTE ל-anon על הפונקציות האלה מפורשות; אף אחת מהן security definer, אז
+-- קריאה כ-anon כבר נכשלת ברמת הטבלה (אין לו יותר גישה), אבל עדיף להסיר את ההרשאה גם במפורש.
+revoke execute on function
+  create_ride(bigint, text, int, text, text, boolean),
+  join_ride(bigint, text, boolean),
+  leave_ride(bigint, text),
+  claim_equipment(bigint, text),
+  unclaim_equipment(bigint, text)
+from anon;
+
+alter function yz_events_guard() set search_path = public;
+alter function claim_equipment(bigint, text) set search_path = public;
+alter function unclaim_equipment(bigint, text) set search_path = public;
+alter function leave_ride(bigint, text) set search_path = public;
+alter function yz_rides_guard() set search_path = public;
+alter function yz_passengers_guard() set search_path = public;
+alter function create_ride(bigint, text, int, text, text, boolean) set search_path = public;
+alter function join_ride(bigint, text, boolean) set search_path = public;
 
 commit;
 
