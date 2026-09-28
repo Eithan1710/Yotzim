@@ -70,6 +70,7 @@ h2.sec{font:400 19px/1 var(--display);margin:26px 2px 12px}
 .mine{font-size:13px;font-weight:800;border-radius:99px;padding:4px 10px;flex:none}
 .mine.maybe{background:var(--maybe-bg);color:var(--maybe)}
 .mine.no{background:var(--no-bg);color:var(--no)}
+.mine.yes{background:var(--yes-bg);color:var(--yes)}
 .ccnts{display:flex;flex-wrap:wrap;gap:4px 14px;margin:12px 0;color:var(--ink-2);font-weight:600;font-size:14.5px}
 .ccnts .cnt:first-child{color:var(--ink);font-weight:800}
 .cbtn{width:100%;height:46px;border-radius:14px;font-weight:800;background:hsl(var(--h) 92% 72%);color:var(--hero-ink)}
@@ -400,10 +401,10 @@ textarea{-webkit-user-select:text;user-select:text}
 .codebox{display:flex;align-items:center;gap:10px}
 .code{flex:1;font-family:ui-monospace,Menlo,monospace;font-weight:800;letter-spacing:.08em;background:var(--chip);border-radius:12px;padding:10px 12px}
 
-/* ---- attendance is unmistakable on every upcoming card ---- */
-.card.ev.going{box-shadow:inset 0 0 0 2px var(--yes)}
-.mine.yes{background:var(--yes);color:#fff;font-weight:800;border-radius:99px;padding:5px 11px;font-size:13px;white-space:nowrap}
-.card.ev.going .cbtn.done{background:var(--yes);color:#fff}
+/* ---- attendance is unmistakable on every upcoming card: the same green accent bar the card already
+   uses for its "kind" color takes over as an attendance signal, plus the ✓ chip and quiet done-button
+   that already exist for this state elsewhere — no extra ring or solid-fill block piled on top ---- */
+.card.ev.going::before{background:var(--yes)}
 
 /* ---- crew label on outing cards ---- */
 .gbadge{display:inline-block;margin-inline-start:6px;font-size:12px;font-weight:800;padding:2px 9px;border-radius:99px;background:rgba(139,124,246,.16);color:#6B5BE0;vertical-align:middle}
