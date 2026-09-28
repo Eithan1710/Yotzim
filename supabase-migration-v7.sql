@@ -261,11 +261,37 @@ drop policy if exists "events select" on events;
 drop policy if exists "events insert" on events;
 drop policy if exists "events update" on events;
 drop policy if exists "events delete" on events;
-create policy "events select" on events for select to authenticated using (can_see_event(id));
+-- events select/update use an INLINE predicate over the row's own columns rather than can_see_event(id).
+-- can_see_event() does its own `select ... from events e where e.id = p_event`, and when it is used as the
+-- events table's own SELECT policy, an INSERT ... RETURNING (which the app always uses, and which requires
+-- passing the SELECT policy on the new row) fails: that self-referential lookup does not see the row being
+-- inserted in the very same statement, so the check evaluates to false for every brand-new row even though
+-- it is a fully public event created by its own creator. can_see_event() stays correct (and is unaffected
+-- by this) for every OTHER table's policies below, since those look up an already-existing, already-committed
+-- event_id rather than re-querying the table currently being written to.
+create policy "events select" on events for select to authenticated using (
+  not is_private
+  or created_by = current_name()
+  or exists (select 1 from event_groups g join group_members m on m.group_id = g.group_id
+             where g.event_id = events.id and m.member_name = current_name())
+);
 create policy "events insert" on events for insert to authenticated
   with check (current_name() is not null and created_by = current_name());
 create policy "events update" on events for update to authenticated
-  using (current_name() is not null and can_see_event(id)) with check (can_see_event(id));
+  using (
+    current_name() is not null and (
+      not is_private
+      or created_by = current_name()
+      or exists (select 1 from event_groups g join group_members m on m.group_id = g.group_id
+                 where g.event_id = events.id and m.member_name = current_name())
+    )
+  )
+  with check (
+    not is_private
+    or created_by = current_name()
+    or exists (select 1 from event_groups g join group_members m on m.group_id = g.group_id
+               where g.event_id = events.id and m.member_name = current_name())
+  );
 -- מחיקה: רק היוצר, ורק ליציאה שעוד לא עברה (אותה שעת חסד של 3 שעות שהאפליקציה משתמשת בה)
 create policy "events delete" on events for delete to authenticated
   using (created_by = current_name()
