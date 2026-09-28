@@ -3,7 +3,7 @@
 // Nothing here logs in to, or scrapes around the restrictions of, Instagram / Facebook: those pages only appear
 // if a normal public search engine returns them.
 
-export type Ctx = { areas: string[]; group_size: number; age: number; wish: string; prefTags: string[] };
+export type Ctx = { areas: string[]; group_size: number; age: number; wish: string; prefTags: string[]; from: string; to: string };
 export type Evidence = { title: string; url: string; snippet: string };
 export interface Provider {
   name: string;
@@ -56,11 +56,11 @@ const groqBrowserSearch: Provider = {
             {
               role: "user",
               content:
-                `Today is ${today}. Find what is happening now or in the next 3 weeks and which places are currently popular in ${area}, Israel, ` +
+                `Today is ${today}. Find events happening between ${ctx.from} and ${ctx.to} (nothing outside this date range) and places that are currently popular in ${area}, Israel, ` +
                 `for a group of ${ctx.group_size} people around age ${ctx.age}. What they want: "${ctx.wish || "a fun social outing"}". ` +
                 (ctx.prefTags.length ? `They like: ${ctx.prefTags.join(", ")}. ` : "") +
                 "Look at event listings, venue and restaurant/bar websites, local articles, Reddit threads and any public social pages that a normal web search returns. " +
-                "Note the crowd/age, atmosphere and anything about opening days or prices, only if a page says so.",
+                "For every event, report its exact date and start time and the direct URL of that event's own page. Note the crowd/age, atmosphere and anything about opening days or prices, only if a page says so.",
             },
           ],
         }),
@@ -96,7 +96,7 @@ const tavily: Provider = {
   enabled: () => !!Deno.env.get("TAVILY_API_KEY"),
   async research(ctx) {
     const qs = ctx.areas.slice(0, 3).flatMap((a) => [
-      `${a} events this week ${ctx.wish}`.trim(),
+      `${a} events ${ctx.from} to ${ctx.to} ${ctx.wish}`.trim(),
       `${a} popular bars clubs beach young crowd`,
     ]);
     const res = await Promise.allSettled(qs.map(async (query) => {

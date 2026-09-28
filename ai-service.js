@@ -104,24 +104,51 @@ function cleanRec(r){
     verified:sources.length>0,sources
   };
 }
-async function suggest(ctx){
+async function post(body,ms){
   const url=endpoint();
   if(!url)throw new AIError('disabled');
   if(navigator.onLine===false)throw new AIError('offline');
   const key=(window.APP_CONFIG||{}).SUPABASE_ANON_KEY||'';
   const headers={'Content-Type':'application/json',apikey:key};
   if(key.indexOf('eyJ')===0)headers.Authorization='Bearer '+key;
-  const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),100000);
+  const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),ms);
   let res;
-  try{res=await fetch(url,{method:'POST',headers,body:JSON.stringify(ctx),signal:ctl.signal})}
+  try{res=await fetch(url,{method:'POST',headers,body:JSON.stringify(body),signal:ctl.signal})}
   catch(e){throw new AIError(e&&e.name==='AbortError'?'timeout':(navigator.onLine===false?'offline':'groq'))}
   finally{clearTimeout(timer)}
   let data=null;try{data=await res.json()}catch(e){}
   if(res.status===429)throw new AIError('rate');
   if(!res.ok||!data||data.ok!==true)throw new AIError(data&&MSG[data.error]?data.error:'groq');
+  return data;
+}
+async function suggest(ctx){
+  const data=await post(ctx,100000);
   const recs=(Array.isArray(data.recommendations)?data.recommendations:[]).map(cleanRec).filter(Boolean).slice(0,6);
   if(!recs.length)throw new AIError('no_info');
-  return{intro:clip(data.intro,120)||'מצאנו כמה רעיונות שיכולים להתאים לכם:',recs,general:data.researchOk===false,at:Date.now()};
+  const w=data.window&&/^\d{4}-\d{2}-\d{2}$/.test(data.window.from||'')&&/^\d{4}-\d{2}-\d{2}$/.test(data.window.to||'')?
+    {from:data.window.from,to:data.window.to,explicit:!!data.window.explicit}:null;
+  return{intro:clip(data.intro,120)||'מצאנו כמה רעיונות שיכולים להתאים לכם:',recs,general:data.researchOk===false,window:w,at:Date.now()};
+}
+
+/* "More information" about ONE recommendation: the server gets that recommendation's own data and answers about it only */
+function recRef(r){
+  let h=0;const t=[r.name,r.date||'',r.eventUrl||'',r.venue||''].join('|');
+  for(let i=0;i<t.length;i++)h=(h*31+t.charCodeAt(i))|0;
+  return 'r'+(h>>>0).toString(36);
+}
+const strs=(v,k,m)=>(Array.isArray(v)?v:[]).map(x=>clip(x,m)).filter(Boolean).slice(0,k);
+async function details(r){
+  const ref=recRef(r);
+  const data=await post({action:'details',ref,item:{
+    name:r.name,kind:r.kind,type:r.type,location:r.location,venue:r.venue,address:r.address,description:r.description,
+    why:r.why,cost:r.cost,age:r.age,date:r.date,time:r.time,event_url:r.eventUrl,source_urls:r.sources.map(s=>s.url)}},45000);
+  if(data.ref&&data.ref!==ref)throw new AIError('groq');   // an answer for a different outing is never shown
+  const d=data.details||{};
+  const one=k=>clip(d[k],200)||null;
+  return{ref,summary:clip(d.summary,300),meeting_point:one('meeting_point'),duration:one('duration'),difficulty:one('difficulty'),
+    price:one('price'),organizer:one('organizer'),age_restriction:one('age_restriction'),
+    bring:strs(d.bring,12,80),requirements:strs(d.requirements,8,120),instructions:strs(d.instructions,8,160),extra:strs(d.extra,6,160),
+    unknown:strs(d.unknown,8,30),pagesRead:Number(data.pagesRead)||0};
 }
 
 /* ---------- small helpers for the UI ---------- */
@@ -156,5 +183,5 @@ function toDraft(r){
   return{kind:r.kind,place,description:clip(r.description,500),date:r.date,time:r.time};
 }
 
-window.AIOuting={suggest,buildContext,sourceLabel,navQuery,moreInfoUrl,infoLabel,toDraft,AIError,MSG};
+window.AIOuting={suggest,details,recRef,buildContext,sourceLabel,navQuery,moreInfoUrl,infoLabel,toDraft,AIError,MSG};
 })();

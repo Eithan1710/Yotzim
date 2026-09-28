@@ -74,7 +74,10 @@ const RULE_ERR={
   YZ_ALREADY_IN_RIDE:'אתה כבר משובץ ברכב אחר',
   YZ_SEATS_TAKEN:'יש ברכב יותר נוסעים ממספר המקומות',
   YZ_ITEM_TAKEN:'הפריט הזה כבר משובץ למישהו אחר',
-  YZ_ITEM_NOT_FOUND:'הפריט הזה כבר לא קיים'
+  YZ_ITEM_NOT_FOUND:'הפריט הזה כבר לא קיים',
+  YZ_NAME_TAKEN:'השם הזה כבר תפוס',YZ_BAD_NAME:'השם לא תקין',YZ_BAD_CODE:'הקוד לא נכון',
+  YZ_BAD_INVITE:'הקישור לא תקין או שפג תוקפו',YZ_NO_PROFILE:'צריך קודם לבחור שם',YZ_FORBIDDEN:'אין לך הרשאה לפעולה הזו',
+  YZ_DELETE_FORBIDDEN:'רק מי שיצר את היציאה יכול למחוק אותה',YZ_EDIT_FORBIDDEN:'אין לך הרשאה לערוך את היציאה הזו'
 };
 
 /* ---------- identity: just a name, kept in localStorage ---------- */
@@ -83,7 +86,15 @@ try{const m=JSON.parse(LS.get('yotz.me')||'null');if(m&&m.name)me={id:m.name,nam
 const myId=()=>me?me.id:null;
 
 /* ---------- state ---------- */
-const state={people:[],events:[],ready:false,mode:null,err:false};
+const state={people:[],events:[],ready:false,mode:null,err:false,avatars:{},groups:[],groupsOk:false};
+let metaSig='';
+function setMeta(m){
+  const sig=JSON.stringify([m.avatars,m.groups]);
+  state.groupsOk=!!(m.ok&&m.ok.groups);
+  if(sig===metaSig)return;
+  metaSig=sig;state.avatars=m.avatars||{};state.groups=m.groups||[];
+  render();refreshSheet();maybeOpenInvite();
+}
 let store=null;
 // a link from a calendar event (?event=123) opens that outing once the board has loaded and a name is set
 let pendingEventId=null;
@@ -131,7 +142,8 @@ function setEvents(o,fresh){
     return{id:String(id),kind:has(KINDS,v.kind)?v.kind:'other',place:String(v.place||'').slice(0,80),when:Number(v.when)||0,
       transport:has(TRANSPORT,v.transport)?v.transport:'unknown',
       description:String(v.description||'').slice(0,500),by:v.by?String(v.by):null,
-      rsvps:rs,rides,ratings:cleanRatings(v.ratings),equipment:cleanEquipment(v.equipment)};
+      rsvps:rs,rides,ratings:cleanRatings(v.ratings),equipment:cleanEquipment(v.equipment),
+      groupIds:Array.isArray(v.groupIds)?v.groupIds.map(String):[],priv:!!v.priv};
   }).filter(e=>e.when);
   // the group = everyone who has answered at least one outing
   const names=new Set();
@@ -246,6 +258,11 @@ function makeLocal(){
       (names||[]).forEach(n=>{const trimmed=String(n||'').trim().slice(0,40);if(trimmed&&eq.length<60)eq.push({id:rid('q'),name:trimmed,addedBy:addedBy||null,assignedTo:null})});
       save();emit();
     },
+    async renameEquipmentItem(eventId,itemId,name){
+      const eq=equipOf(eventId);if(!eq)return;
+      const it=eq.find(x=>x.id===itemId),v=String(name||'').trim().slice(0,40);
+      if(it&&v){it.name=v;save();emit()}
+    },
     async removeEquipmentItem(eventId,itemId){
       const eq=equipOf(eventId);if(!eq)return;
       const i=eq.findIndex(x=>x.id===itemId);if(i>=0)eq.splice(i,1);
@@ -268,12 +285,44 @@ function makeLocal(){
 
 function makeSupabase(url,key){
   url=url.replace(/\/+$/,'');
-  const H={apikey:key,'Content-Type':'application/json'};
-  if(key.indexOf('eyJ')===0)H.Authorization='Bearer '+key;   // legacy JWT-style anon key
   const UP='resolution=merge-duplicates,return=minimal';
-  async function api(method,path,body,prefer){
-    const headers=Object.assign({},H);if(prefer)headers.Prefer=prefer;
+  /* Identity: every device signs in anonymously (Supabase Auth) and gets a real JWT. The database (RLS) knows who is
+     calling from that JWT, so permissions no longer depend on a name the browser claims. No form, no password. */
+  const AK='yotz.auth';
+  let sess=null;try{sess=JSON.parse(LS.get(AK)||'null')}catch(e){}
+  let sessP=null;
+  async function authFetch(path,body){
+    let r;
+    try{r=await fetch(url+'/auth/v1/'+path,{method:'POST',headers:{apikey:key,'Content-Type':'application/json'},body:JSON.stringify(body||{})})}
+    catch(e){const x=new Error('offline');x.code='unavailable';throw x}
+    if(!r.ok){const x=new Error('auth '+r.status);x.code='auth';x.status=r.status;throw x}
+    return r.json();
+  }
+  const keepSession=j=>{
+    sess={access:j.access_token,refresh:j.refresh_token,
+      exp:j.expires_at?j.expires_at*1000:Date.now()+(j.expires_in||3600)*1000,uid:(j.user&&j.user.id)||(sess&&sess.uid)||null};
+    LS.set(AK,JSON.stringify(sess));return sess;
+  };
+  function getSession(force){
+    if(!force&&sess&&sess.exp-60000>Date.now())return Promise.resolve(sess);
+    if(!sessP)sessP=(async()=>{
+      try{
+        if(sess&&sess.refresh){
+          try{return keepSession(await authFetch('token?grant_type=refresh_token',{refresh_token:sess.refresh}))}
+          catch(e){if(e.code!=='auth')throw e}   // offline: keep the identity, try again later. Only a refused token starts over.
+        }
+        return keepSession(await authFetch('signup',{}));
+      }finally{sessP=null}
+    })();
+    return sessP;
+  }
+  const rpc=(fn,args)=>api('POST','rpc/'+fn,args||{},'return=representation');
+  async function api(method,path,body,prefer,retried){
+    const s=await getSession();
+    const headers={apikey:key,'Content-Type':'application/json',Authorization:'Bearer '+s.access};
+    if(prefer)headers.Prefer=prefer;
     const r=await fetch(url+'/rest/v1/'+path,{method,headers,body:body?JSON.stringify(body):undefined});
+    if(r.status===401&&!retried){if(sess)sess.exp=0;return api(method,path,body,prefer,true)}
     if(!r.ok){
       const e=new Error('http '+r.status);
       e.code=(r.status===401||r.status===403)?'forbidden':r.status===409?'conflict':'unavailable';
@@ -281,9 +330,10 @@ function makeSupabase(url,key){
       try{const j=await r.json();if(j&&j.message){e.msg=String(j.message);if(RULE_ERR[e.msg])e.code='rule'}}catch(_){}
       throw e;
     }
+    if(r.status===204)return null;
     return(method==='GET'||(prefer&&prefer.indexOf('representation')>=0))?r.json():null;
   }
-  let cache={},onE,pending=0,lastSig=null,firstDone=false,ratingsAvail=true,equipmentAvail=true;
+  let cache={},onE,onM,pending=0,lastSig=null,firstDone=false,ratingsAvail=true,equipmentAvail=true;
   const emit=()=>onE(cache,firstDone);
   const findRide=(eventId,rideId)=>{const e=cache[eventId];return e?e.rides.find(r=>String(r.id)===String(rideId)):null};
   const findEquip=(eventId,itemId)=>{const e=cache[eventId];return e?e.equipment.find(x=>String(x.id)===String(itemId)):null};
@@ -293,7 +343,9 @@ function makeSupabase(url,key){
     // ratings and equipment each live in their own request: if the matching migration wasn't run yet, the board still works without them
     const ratingsP=api('GET','outing_ratings?select=event_id,rater_name,stars,comment').catch(()=>null);
     const equipP=api('GET','equipment_items?select=id,event_id,name,added_by,assigned_to').catch(()=>null);
-    const rows=await api('GET','events?select=*,participants(name,status),rides(id,driver_name,available_seats,pickup_location,note,ride_passengers(passenger_name))&date=gte.'+iso(since)+'&order=date.asc,time.asc');
+    const profP=api('GET','profiles?select=name,avatar_path,avatar_v').catch(()=>null);
+    const grpP=api('GET','groups?select=id,name,invite_token,group_members(member_name)').catch(()=>null);
+    const rows=await api('GET','events?select=*,participants(name,status),event_groups(group_id),rides(id,driver_name,available_seats,pickup_location,note,ride_passengers(passenger_name))&date=gte.'+iso(since)+'&order=date.asc,time.asc');
     if(pending)return;
     const rr=await ratingsP;
     ratingsAvail=rr!==null;
@@ -311,9 +363,16 @@ function makeSupabase(url,key){
       const rides=(e.rides||[]).map(r=>({id:r.id,driver:r.driver_name,seats:r.available_seats,
         pickup:r.pickup_location||'',note:r.note||'',passengers:(r.ride_passengers||[]).map(p=>p.passenger_name)}));
       events[e.id]={kind:kindFromLabel(e.type),place:e.title||e.location,when:new Date(y,m-1,d,hh,mm).getTime(),
-        transport:trFromLabel(e.transport),description:e.description||'',by:e.created_by||null,rsvps:rs,rides,ratings:rmap[e.id]||{},equipment:emap[e.id]||[]};
+        transport:trFromLabel(e.transport),description:e.description||'',by:e.created_by||null,rsvps:rs,rides,ratings:rmap[e.id]||{},equipment:emap[e.id]||[],
+        groupIds:(e.event_groups||[]).map(g=>g.group_id),priv:!!e.is_private};
     });
     firstDone=true;
+    if(onM){
+      const pr=await profP,gr=await grpP,base=url+'/storage/v1/object/public/avatars/';
+      const avatars={};(pr||[]).forEach(x=>{if(x.avatar_path)avatars[x.name]=base+encodeURIComponent(x.avatar_path)+'?v='+x.avatar_v});
+      const groups=(gr||[]).map(g=>({id:g.id,name:g.name,token:g.invite_token,members:(g.group_members||[]).map(m=>m.member_name)}));
+      onM({avatars,groups,profiles:(pr||[]).map(x=>x.name),ok:{avatars:pr!==null,groups:gr!==null}});
+    }
     const sig=JSON.stringify(events);
     if(sig===lastSig)return;
     lastSig=sig;cache=events;LS.set('yotz.cache.v1',sig);emit();
@@ -326,8 +385,8 @@ function makeSupabase(url,key){
     return out;
   }
   return{
-    subscribe(cb,onErr){
-      onE=cb;
+    subscribe(cb,onErr,onMeta){
+      onE=cb;onM=onMeta;
       try{const c=JSON.parse(LS.get('yotz.cache.v1')||'null');if(c&&typeof c==='object'){cache=c;emit()}}catch(e){}
       const tick=()=>pull().catch(err=>{if(!firstDone)onErr(err)});
       tick();
@@ -339,10 +398,14 @@ function makeSupabase(url,key){
       const d=new Date(ev.when);
       const rows=await api('POST','events',{title:ev.place,type:KINDS[ev.kind].t,location:ev.place,
         date:iso(d),time:hhmm(d),transport:TRANSPORT[ev.transport].t,
-        description:ev.description||null,created_by:ev.by||null},'return=representation');
+        description:ev.description||null,created_by:ev.by||null,is_private:!!(ev.groupIds&&ev.groupIds.length)},'return=representation');
       const id=rows[0].id;
-      await api('POST','participants?on_conflict=event_id,name',
-        Object.keys(ev.rsvps).map(n=>({event_id:id,name:n,status:STATUS_OUT[ev.rsvps[n]]})),UP);
+      try{
+        // private from the first instant (is_private above); the group links follow. If they fail the outing is removed, never left open.
+        if(ev.groupIds&&ev.groupIds.length)await api('POST','event_groups',ev.groupIds.map(g=>({event_id:id,group_id:g})),'return=minimal');
+        await api('POST','participants?on_conflict=event_id,name',
+          Object.keys(ev.rsvps).map(n=>({event_id:id,name:n,status:STATUS_OUT[ev.rsvps[n]]})),UP);
+      }catch(e){try{await api('DELETE','events?id=eq.'+id)}catch(_){}throw e}
       return String(id);
     }),
     updateEvent:(id,patch)=>write(()=>{if(cache[id])Object.assign(cache[id],patch)},()=>{
@@ -352,19 +415,42 @@ function makeSupabase(url,key){
       if('when'  in patch){const d=new Date(patch.when);body.date=iso(d);body.time=hhmm(d)}
       if('transport' in patch)body.transport=TRANSPORT[patch.transport].t;
       if('description' in patch)body.description=patch.description||null;
-      return api('PATCH','events?id=eq.'+encodeURIComponent(id),body,'return=minimal');
+      // row-level security turns a forbidden update into "0 rows changed", not an error: check that something really changed
+      return api('PATCH','events?id=eq.'+encodeURIComponent(id),body,'return=representation').then(r=>{
+        if(!r||!r.length){const e=new Error('forbidden');e.code='forbidden';e.msg='YZ_EDIT_FORBIDDEN';throw e}
+      });
     }),
     // Not "going" anymore → the database trigger takes them out of any car (and removes their own car).
     // The same thing is applied to the screen right away so it never shows a seat that no longer exists.
     setRsvp:(id,name,st)=>write(()=>{if(cache[id]){cache[id].rsvps[name]=st;cache[id].rides=applyRsvpToRides(cache[id].rides,name,st)}},
       ()=>api('POST','participants?on_conflict=event_id,name',[{event_id:Number(id),name,status:STATUS_OUT[st]}],UP)),
     deleteEvent:id=>write(()=>{delete cache[id]},
-      ()=>api('DELETE','events?id=eq.'+encodeURIComponent(id))),
-    renamePerson:(from,to)=>write(null,async()=>{
-      await api('PATCH','participants?name=eq.'+encodeURIComponent(from),{name:to},'return=minimal');
-      try{await api('PATCH','outing_ratings?rater_name=eq.'+encodeURIComponent(from),{rater_name:to},'return=minimal')}catch(e){}
-      try{await api('PATCH','user_prefs?name=eq.'+encodeURIComponent(from),{name:to},'return=minimal')}catch(e){}
+      // same here: only the creator's delete removes a row, and only the server can say so
+      ()=>api('DELETE','events?id=eq.'+encodeURIComponent(id),null,'return=representation').then(r=>{
+        if(!r||!r.length){const e=new Error('forbidden');e.code='forbidden';e.msg='YZ_DELETE_FORBIDDEN';throw e}
+      })),
+    /* profile: name <-> this device, optional picture, recovery code for a new device */
+    claimProfile:name=>rpc('claim_profile',{p_name:name}),
+    recoverProfile:(name,code)=>rpc('recover_profile',{p_name:name,p_code:code}),
+    getRecoveryCode:()=>rpc('get_recovery_code',{}),
+    setAvatar:blob=>write(null,async()=>{
+      const s=await getSession(),path=s.uid+'.jpg';
+      const r=await fetch(url+'/storage/v1/object/avatars/'+path,{method:'POST',
+        headers:{apikey:key,Authorization:'Bearer '+s.access,'Content-Type':'image/jpeg','x-upsert':'true'},body:blob});
+      if(!r.ok){const e=new Error('upload '+r.status);e.code='unavailable';throw e}
+      await rpc('set_avatar',{p_path:path});
     }),
+    clearAvatar:()=>write(null,async()=>{
+      await rpc('clear_avatar',{});
+      try{const s=await getSession();await fetch(url+'/storage/v1/object/avatars/'+s.uid+'.jpg',{method:'DELETE',headers:{apikey:key,Authorization:'Bearer '+s.access}})}catch(e){}
+    }),
+    /* groups */
+    createGroup:name=>write(null,()=>rpc('create_group',{p_name:name})),
+    groupPreview:token=>rpc('group_preview',{p_token:token}),
+    joinGroup:token=>write(null,()=>rpc('join_group',{p_token:token})),
+    leaveGroup:id=>write(null,()=>rpc('leave_group',{p_group:id})),
+    groupsOk:()=>true,
+    renamePerson:(from,to)=>write(null,()=>rpc('rename_profile',{p_new:to})),
     ratingsOk:()=>ratingsAvail,
     setRating:(id,name,stars,comment)=>write(()=>{const e=cache[id];if(e){(e.ratings||(e.ratings={}))[name]={stars,comment:comment||''}}},
       ()=>api('POST','outing_ratings?on_conflict=event_id,rater_name',[{event_id:Number(id),rater_name:name,stars,comment:comment||null}],UP)),
@@ -396,6 +482,10 @@ function makeSupabase(url,key){
         .map(n=>({event_id:Number(eventId),name:n,added_by:addedBy||null}));
       return rows.length?api('POST','equipment_items',rows,'return=minimal'):null;
     }),
+    renameEquipmentItem:(eventId,itemId,name)=>write(()=>{const it=findEquip(eventId,itemId);if(it)it.name=name},
+      ()=>api('PATCH','equipment_items?id=eq.'+encodeURIComponent(itemId),{name},'return=representation').then(r=>{
+        if(!r||!r.length){const e=new Error('forbidden');e.code='forbidden';e.msg='YZ_EDIT_FORBIDDEN';throw e}
+      })),
     removeEquipmentItem:(eventId,itemId)=>write(()=>{const e=cache[eventId];if(e)e.equipment=e.equipment.filter(x=>String(x.id)!==String(itemId))},
       ()=>api('DELETE','equipment_items?id=eq.'+encodeURIComponent(itemId))),
     claimEquipment:(eventId,itemId,name)=>write(()=>{const it=findEquip(eventId,itemId);if(it)it.assignedTo=name},
@@ -576,7 +666,7 @@ function hero(ev){
     <div class="info" data-act="open" data-id="${esc(ev.id)}" role="button" tabindex="0">
       <div class="hrow"><span class="emo">${k.e}</span><span class="hrt">${trText(ev)?`<span class="tr">${trText(ev)}</span>`:''}<button class="hshare" data-act="share" data-id="${esc(ev.id)}" aria-label="שתפו את היציאה">${SHARE_ICON}<span>שתפו</span></button></span></div>
       <div class="place">${esc(ev.place)}</div>
-      <div class="when">${whenLabel(ev.when)}</div>
+      <div class="when">${whenLabel(ev.when)}${groupBadge(ev)}</div>
       <div class="cnts">${cn(g)}</div>
       <div class="names">${names}</div>
     </div>
@@ -599,28 +689,40 @@ function relInfo(ts){
   else t='בעוד '+Math.round(diff/30)+' חודשים';
   return{t,tone,diff};
 }
+// One avatar: the person's own picture when they added one, otherwise the colored initial (the existing default)
+function avEl(name,extra){
+  const u=state.avatars[name];
+  return u?`<span class="av pic${extra||''}" title="${esc(name)}"><img src="${esc(u)}" alt="" loading="lazy" decoding="async"></span>`
+    :`<span class="av${extra||''}" style="--ah:${hashOf(name)%360}" title="${esc(name)}">${esc([...name][0]||'?')}</span>`;
+}
+// Which crew an outing belongs to, shown right on the card
+function groupBadge(ev){
+  if(!ev.priv&&!ev.groupIds.length)return '';
+  const n=ev.groupIds.map(id=>{const g=state.groups.find(x=>x.id===id);return g?g.name:null}).filter(Boolean);
+  return `<span class="gbadge">👥 ${esc(n.length?n.join(' · '):'קבוצה פרטית')}</span>`;
+}
 // Small round initials for who's coming (real names only, colors are stable per name)
 function avatars(list){
   if(!list.length)return '<span class="av-empty">היו הראשונים להגיע</span>';
-  const show=list.slice(0,4).map(p=>`<span class="av${me&&p.id===me.id?' me':''}" style="--ah:${hashOf(p.name)%360}" title="${esc(p.name)}">${esc([...p.name][0]||'?')}</span>`).join('');
+  const show=list.slice(0,4).map(p=>avEl(p.name,me&&p.id===me.id?' me':'')).join('');
   const more=list.length>4?`<span class="av more">+${list.length-4}</span>`:'';
   return `<span class="avs">${show}${more}</span>`;
 }
 function card(ev){
   const k=KINDS[ev.kind],g=groups(ev),my=ev.rsvps[myId()],id=esc(ev.id),d=new Date(ev.when),rel=relInfo(ev.when);
-  const pill=my==='maybe'||my==='no'?`<span class="mine ${my}">${my==='maybe'?'🟡 אולי':'🔴 לא מגיע'}</span>`:'';
+  const pill=my?`<span class="mine ${my}">${my==='yes'?'✓ אתה מגיע':(my==='maybe'?'🟡 אולי':'🔴 לא מגיע')}</span>`:'';
   const action=my==='yes'
     ?`<button class="cbtn done" data-act="open" data-id="${id}">✓ אתה מגיע</button>`
     :`<button class="cbtn" data-act="rsvp" data-id="${id}" data-s="yes">אני מגיע</button>`;
   const going=g.yes.length?`<span class="gtxt"><b>${g.yes.length}</b> ${g.yes.length===1?'מגיע':'מגיעים'}${g.maybe.length?' · '+g.maybe.length+' אולי':''}</span>`:'';
-  return `<article class="card ev ${rel.tone}" style="--h:${k.h}">
+  return `<article class="card ev ${rel.tone}${my==='yes'?' going':''}" style="--h:${k.h}">
     <div class="info" data-act="open" data-id="${id}" role="button" tabindex="0">
       <div class="crow">
         <div class="dbadge" aria-hidden="true"><span class="dw">${DAYS[d.getDay()]}</span><span class="dd">${d.getDate()}</span><span class="dm">${MONTHS[d.getMonth()]}</span></div>
         <div class="ctxt">
           <div class="cplace"><span class="ke" aria-hidden="true">${k.e}</span>${esc(ev.place)}</div>
           <div class="cwhen">🕘 ${hhmm(d)}${trText(ev)?' · '+trText(ev):''}</div>
-          <span class="rel">${rel.t}</span>
+          <span class="rel">${rel.t}</span>${groupBadge(ev)}
         </div>${pill}
       </div>
       <div class="cfoot">${avatars(g.yes)}${going}</div>
@@ -634,7 +736,7 @@ function prow(ev){
   const myRated=!!(me&&ev.ratings[me.id]);
   const cta=(ratingsOn&&went&&!myRated)
     ?`<button class="prate" data-act="open" data-id="${esc(ev.id)}">⭐ דרגו</button>`
-    :(mean?`<span class="pravg">⭐ ${mean}</span>`:'');
+    :(myRated?`<span class="pravg mine">✓ דירגת ${ev.ratings[me.id].stars}★</span>`:(mean?`<span class="pravg">⭐ ${mean}</span>`:''));
   return `<article class="pcard">
     <div class="info" data-act="open" data-id="${esc(ev.id)}" role="button" tabindex="0">
       <span class="ptile" aria-hidden="true">${k.e}</span>
@@ -646,7 +748,8 @@ function prow(ev){
     </div>${cta}</article>`;
 }
 const head=()=>'<header class="top"><h1 class="brand">יוצאים?</h1>'+
-  (me?`<button class="who" data-act="rename" aria-label="שינוי שם">👤 ${esc(me.name)}</button>`:'')+'</header>';
+  (me?`<button class="who" data-act="rename" aria-label="הפרופיל שלי">${state.avatars[me.name]?avEl(me.name,' sm'):'👤'} ${esc(me.name)}</button>`
+    :'<button class="who" data-act="pick-other">בחירת שם</button>')+'</header>';
 
 function render(){
   const app=$('#app');if(!app)return;
@@ -659,7 +762,7 @@ function render(){
   const now=Date.now();
   const up=state.events.filter(e=>e.when+PAST_AFTER>=now).sort((a,b)=>a.when-b.when);
   const past=state.events.filter(e=>e.when+PAST_AFTER<now).sort((a,b)=>b.when-a.when).slice(0,15);
-  let h=head()+installUI()+aiCardHTML()+'<h2 class="sec">🔥 קרוב</h2>';
+  let h=head()+installUI()+aiCardHTML()+groupsBarHTML()+'<h2 class="sec">🔥 קרוב</h2>';
   if(!up.length){
     h+='<div class="empty-state">אין יציאות קרובות.<br>לחצו על ״+ יציאה״ ופתחו את הראשונה.</div>';
   }else{
@@ -897,7 +1000,7 @@ function openBlocked(eventId,kind,rideId){
 /* ---------- equipment: a simple packing list, one assignee per item ---------- */
 function equipmentHTML(ev,isPast){
   const items=ev.equipment||[];
-  const canManage=!isPast&&!!(me&&(!ev.by||ev.by===me.id));
+  const canManage=!isPast&&!!me;   // anyone in the outing can add / rename / remove items
   if(isPast&&!items.length)return '';   // nothing to show in history if nobody listed anything
   let h='<div class="grp equip"><div class="gh">🎒 ציוד</div>';
   if(!items.length){
@@ -910,10 +1013,12 @@ function equipmentHTML(ev,isPast){
       else if(mine)action=`<button class="eqbtn mine" data-act="equip-unclaim" data-id="${esc(ev.id)}" data-item="${esc(it.id)}">✓ אתה מביא · הסר</button>`;
       else if(taken)action=`<span class="eqwho">${esc(it.assignedTo)} מביא</span>`;
       else action=`<button class="eqbtn" data-act="equip-claim" data-id="${esc(ev.id)}" data-item="${esc(it.id)}">אני אביא</button>`;
+      const ed=canManage?`<button class="pillx" data-act="equip-edit" data-id="${esc(ev.id)}" data-item="${esc(it.id)}" aria-label="שינוי שם של ${esc(it.name)}">✏️</button>`:'';
       const rm=canManage?`<button class="pillx" data-act="equip-del" data-id="${esc(ev.id)}" data-item="${esc(it.id)}" aria-label="מחק את ${esc(it.name)}">🗑️</button>`:'';
+      if(canManage&&eqEdit===it.id)return `<div class="eqitem"><input class="txt eqedit" id="eq-edit" maxlength="40" value="${esc(it.name)}" aria-label="שם הפריט" enterkeyhint="done"><button class="ch" data-act="equip-save" data-id="${esc(ev.id)}">✓</button></div>`;
       return `<div class="eqitem${taken?' taken':''}">
         <span class="eqname">${taken?'✅':'⚪'} ${esc(it.name)}</span>
-        <span class="eqact">${action}${rm}</span>
+        <span class="eqact">${action}${ed}${rm}</span>
       </div>`;
     }).join('')+'</div>';
   }
@@ -947,9 +1052,10 @@ function detailHTML(ev){
   const k=KINDS[ev.kind],g=groups(ev),my=ev.rsvps[myId()],d=new Date(ev.when);
   const isPast=ev.when+PAST_AFTER<Date.now();
   const sub=(isPast?ddmm(d)+' · '+hhmm(d):whenLabel(ev.when))+(trText(ev)?' · '+trText(ev):'');
-  const canEdit=!isPast&&me&&(!ev.by||ev.by===me.id);
+  const canEdit=!isPast&&!!me;                         // anyone who can see the outing may edit it
+  const canDelete=!isPast&&!!me&&ev.by===me.id;       // only its creator may delete it (the database enforces this too)
   let h=`<div class="grab"></div><div class="dhead" style="--h:${k.h}"><span class="tile">${k.e}</span>
-    <div class="ctxt"><h2 class="dt">${esc(ev.place)}</h2><div class="cwhen">${sub}</div></div>
+    <div class="ctxt"><h2 class="dt">${esc(ev.place)}</h2><div class="cwhen">${sub}</div>${groupBadge(ev)}</div>
     <button class="x" data-act="close" aria-label="סגור">✕</button></div>`;
   if(!isPast)h+=shareBtn(ev)+`<div class="actrow">${navBtn(ev)}${calBtn(ev)}</div>`;
   if(ev.description)h+=`<p class="descr">${esc(ev.description)}</p>`;
@@ -961,7 +1067,7 @@ function detailHTML(ev){
       +grp('none','⚪','עדיין לא ענו',g.none)+grp('no','🔴','לא מגיעים',g.no)
       +ridesHTML(ev)+equipmentHTML(ev,false)
       +(canEdit?`<button class="edit" data-act="edit" data-id="${esc(ev.id)}">✏️ ערוך יציאה</button>`:'')
-      +delBtn(ev)
+      +(canDelete?delBtn(ev):'')
       +`<div class="rsvpbar">${btns(ev,my,'sb','לא מגיע')}</div>`;
   }
   return h;
@@ -971,11 +1077,21 @@ function openDetail(id){
   openSheet(detailHTML(ev));view={type:'detail',id};
 }
 function refreshSheet(){
-  if(!sheetEl||!view||view.type!=='detail')return;
-  const ev=state.events.find(e=>e.id===view.id);
-  if(!ev){closeSheet();return}
-  const sh=sheetEl.querySelector('.sheet'),st=sh.scrollTop;
-  sh.innerHTML=detailHTML(ev);sh.scrollTop=st;
+  if(!sheetEl||!view)return;
+  const sh=sheetEl.querySelector('.sheet');if(!sh)return;
+  const st=sh.scrollTop;
+  if(view.type==='detail'){
+    const ev=state.events.find(e=>e.id===view.id);
+    if(!ev){closeSheet();return}
+    sh.innerHTML=detailHTML(ev);sh.scrollTop=st;
+  }else if(view.type==='groups'){
+    const keep=($('#g-new')||{}).value||'';
+    sh.innerHTML=groupsHTML();const inp=$('#g-new');if(inp)inp.value=keep;sh.scrollTop=st;
+  }else if(view.type==='group'){
+    const g=state.groups.find(x=>x.id===view.id);
+    if(!g){openGroups();return}           // left the group (or it vanished): back to the list
+    sh.innerHTML=groupHTML(g);sh.scrollTop=st;
+  }else if(view.type==='rename'){paintProfileAvatar()}
 }
 
 /* ---------- create / edit form (same sheet, two modes) ---------- */
@@ -992,7 +1108,7 @@ function openForm(editEv,draft){
     kind:editing?editEv.kind:(draft?draft.kind:null),
     transport:editing?editEv.transport:(has(TRANSPORT,LS.get('yotz.tr'))?LS.get('yotz.tr'):'unknown'),
     dm:editing?dayModeOf(editEv.when):(d.getDate()===new Date().getDate()?'today':'tomorrow'),
-    equipment:[]};
+    equipment:[],groupIds:[]};
   if(draft&&draft.date&&draft.date>=iso(new Date()))form.dm='custom';   // an event with a real date: start from it
   const kinds=Object.entries(KINDS).map(([k,v])=>`<button class="opt" data-act="kind" data-v="${k}"><span class="e">${v.e}</span>${v.t}</button>`).join('');
   const trs=Object.entries(TRANSPORT).map(([k,v])=>`<button class="ch" data-act="tr" data-v="${k}">${v.e} ${v.t}</button>`).join('');
@@ -1014,6 +1130,7 @@ function openForm(editEv,draft){
       <div class="fl">איך מגיעים?</div><div class="row">${trs}</div>
       <div class="fl">תיאור (לא חובה)</div>
       <textarea class="txt area" id="f-descr" maxlength="500" placeholder="נפגשים ב-21:30 אצל דניאל, משם ממשיכים לבר…">${editing?esc(editEv.description||''):(draft?esc(draft.description||''):'')}</textarea>
+      ${!editing&&groupsOn()&&state.groups.length?`<div class="fl">למי היציאה?</div><div class="row" id="f-aud"></div>`:''}
       ${editing?'':`<div class="fl">ציוד לקחת (לא חובה)</div>
       <div class="dtrow"><input class="txt" id="f-equip" maxlength="40" placeholder="לדוגמה: אוהל" autocomplete="off" enterkeyhint="done"><button class="ch" data-act="equip-add">+ הוסף</button></div>
       <div class="row equip-row" id="f-equip-list" style="margin-top:8px">${equipChips(form.equipment)}</div>`}
@@ -1027,6 +1144,7 @@ function openForm(editEv,draft){
   $('#f-date').min=iso(new Date());
   if(editing&&form.dm==='custom')$('#f-date').value=iso(d);
   else if(draft&&form.dm==='custom'){$('#f-date').value=draft.date;$('#f-time').value=draft.time||'21:00'}
+  paintAudience();
   syncForm();
 }
 function syncForm(){
@@ -1081,6 +1199,7 @@ function submitForm(){
   }else{
     const ev={kind:form.kind,place,when,transport:form.transport,description,by:me.id,rsvps:{[me.id]:'yes'}};
     const equipToAdd=form.equipment.slice();
+    ev.groupIds=form.groupIds.filter(g=>state.groups.some(x=>x.id===g));   // only crews I really belong to
     closeSheet();
     enqueue(()=>store.addEvent(ev)).then(id=>{
       celebrate();
@@ -1171,17 +1290,220 @@ function deleteRide(eventId,el){
 }
 
 /* ---------- rename / delete ---------- */
+function paintProfileAvatar(){const el=$('#p-av');if(el&&me)el.innerHTML=avEl(me.name,' big')+''}
 function openRename(){
   if(!me)return;
   if(!state.ready){toast('רגע, הלוח נטען');return}
+  const sup=state.mode==='supabase',has_=!!state.avatars[me.name];
   openSheet(`<div class="grab"></div>
-    <div class="dhead"><h2 class="dt">איך קוראים לך?</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
-    <div class="pad"><div class="fl"></div>
+    <div class="dhead"><h2 class="dt">הפרופיל שלי</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
+    <div class="pad">
+      ${sup?`<div class="pform"><span id="p-av">${avEl(me.name,' big')}</span>
+        <div class="pbtns"><button class="actbtn" data-act="avatar-pick">📷 ${has_?'החלפת תמונה':'הוספת תמונה'}</button>${has_?'<button class="actbtn" data-act="avatar-clear">הסרה</button>':''}</div>
+        <input type="file" id="p-file" accept="image/*" hidden></div>
+        <p class="gnote" style="margin:0 0 14px">התמונה לא חובה. בלעדיה מוצג העיגול הצבעוני עם האות הראשונה.</p>`:''}
+      <div class="fl">איך קוראים לך?</div>
       <input class="txt" id="r-name" maxlength="20" autocomplete="off" enterkeyhint="done" aria-label="שם">
-      <button class="submit" data-act="rename-save">שמור</button></div>`);
+      <button class="submit" data-act="rename-save">שמור</button>
+      ${sup?`<div class="fl" style="margin-top:18px">קוד שחזור</div>
+        <p class="gnote" style="margin:0 0 8px">מתחברים ממכשיר אחר? הקוד הזה מחזיר לך את השם והקבוצות שלך. שמרו אותו במקום בטוח.</p>
+        <div class="codebox"><span class="code" id="p-code" dir="ltr">••••••••••</span><button class="actbtn" data-act="code-show">הצג</button></div>`:''}
+    </div>`);
   view={type:'rename'};
   $('#r-name').value=me.name;
 }
+async function showRecoveryCode(el){
+  if(!store||!store.getRecoveryCode)return;
+  const box=$('#p-code');if(!box)return;
+  if(el.dataset.shown){try{await navigator.clipboard.writeText(box.textContent);toast('הקוד הועתק')}catch(e){toast('לא הצלחנו להעתיק')}return}
+  try{const c=await store.getRecoveryCode();if(c){box.textContent=c;el.textContent='העתק';el.dataset.shown='1'}else toast('אין קוד עדיין')}
+  catch(e){writeFail(e)}
+}
+// Picture: cropped to a small square in the browser, so uploads stay tiny and every avatar looks the same
+async function avatarBlob(file){
+  const url=URL.createObjectURL(file);
+  try{
+    const img=await new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=no;i.src=url});
+    const S=256,c=document.createElement('canvas');c.width=c.height=S;
+    const m=Math.min(img.width,img.height);
+    c.getContext('2d').drawImage(img,(img.width-m)/2,(img.height-m)/2,m,m,0,0,S,S);
+    return await new Promise(ok=>c.toBlob(ok,'image/jpeg',.85));
+  }finally{URL.revokeObjectURL(url)}
+}
+async function uploadAvatar(file){
+  if(!me||!store||!store.setAvatar)return;
+  if(!/^image\//.test(file.type)||file.size>20*1024*1024){toast('בחרו תמונה רגילה (עד 20MB)');return}
+  let blob;try{blob=await avatarBlob(file)}catch(e){toast('לא הצלחנו לקרוא את התמונה');return}
+  if(!blob){toast('לא הצלחנו לקרוא את התמונה');return}
+  state.avatars={...state.avatars,[me.name]:URL.createObjectURL(blob)};metaSig='';render();openRenameKeep();   // show it at once
+  enqueue(()=>store.setAvatar(blob)).then(()=>toast('התמונה עודכנה ✓')).catch(e=>{writeFail(e)});
+}
+function openRenameKeep(){if(view&&view.type==='rename'){const v=($('#r-name')||{}).value;openRename();if(v!=null)$('#r-name').value=v}}
+function clearAvatar(){
+  if(!me||!store||!store.clearAvatar)return;
+  const a={...state.avatars};delete a[me.name];state.avatars=a;metaSig='';render();openRenameKeep();
+  enqueue(()=>store.clearAvatar()).then(()=>toast('התמונה הוסרה')).catch(writeFail);
+}
+
+/* ---------- identity: claim the name for this device (server side), recover it on a new one ---------- */
+let profileOk=false;
+async function ensureProfile(){
+  if(!me||!store||!store.claimProfile)return;
+  try{
+    const nm=await store.claimProfile(me.name);
+    if(nm&&nm!==me.name){me={id:nm,name:nm};LS.set('yotz.me',JSON.stringify(me));render()}
+    profileOk=true;maybeOpenInvite();
+  }catch(e){
+    if(e&&e.msg==='YZ_NAME_TAKEN')showNameTaken(me.name);
+    else if(e&&e.code==='unavailable')setTimeout(ensureProfile,5000);
+    else if(e&&e.code==='auth')toast('צריך להפעיל כניסה אנונימית ב-Supabase (ראו SETUP.md)');
+    else writeFail(e);
+  }
+}
+function showNameTaken(name){
+  me=null;LS.set('yotz.me','');render();
+  openSheet(`<div class="grab"></div>
+    <div class="dhead"><h2 class="dt">השם ״${esc(name)}״ כבר תפוס</h2></div>
+    <div class="pad"><p class="shsub" style="margin-top:0">אם זה אתה ממכשיר אחר, הכניסו את קוד השחזור (בפרופיל במכשיר הקודם). אחרת, בחרו שם אחר.</p>
+      <input class="txt" id="rc-code" maxlength="20" autocomplete="off" dir="ltr" placeholder="קוד שחזור" aria-label="קוד שחזור">
+      <button class="submit" data-act="recover" data-name="${esc(name)}">זה אני, שחזר</button>
+      <button class="cancel wide" data-act="pick-other">בחירת שם אחר</button></div>`);
+  view={type:'taken'};
+}
+async function recoverName(name){
+  const code=(($('#rc-code')||{}).value||'').trim();
+  if(!code){const i=$('#rc-code');if(i)i.focus();return}
+  try{
+    const nm=await store.recoverProfile(name,code);
+    me={id:nm,name:nm};LS.set('yotz.me',JSON.stringify(me));profileOk=true;
+    closeSheet();render();toast('ברוך שובך, '+nm+' ✓');maybeOpenInvite();
+  }catch(e){if(e&&e.msg==='YZ_BAD_CODE')toast('הקוד לא נכון');else writeFail(e)}
+}
+
+/* ---------- groups / crews ---------- */
+let pendingGroupToken=null;
+try{const t=new URLSearchParams(location.search).get('g');if(t&&/^[a-f0-9]{16,64}$/i.test(t))pendingGroupToken=t}catch(e){}
+function clearGroupLink(){
+  pendingGroupToken=null;
+  try{const u=new URL(location.href);u.searchParams.delete('g');history.replaceState(null,'',u.pathname+u.search+u.hash)}catch(e){}
+}
+function groupInviteUrl(g){
+  const base=siteUrl();if(!base)return '';
+  try{const u=new URL(base,location.href);u.search='';u.hash='';u.searchParams.set('g',g.token);return u.toString()}
+  catch(e){return base+(base.indexOf('?')>=0?'&':'?')+'g='+encodeURIComponent(g.token)}
+}
+const groupsOn=()=>state.mode==='supabase'&&store&&store.createGroup;
+function groupsBarHTML(){
+  if(!(state.ready&&me&&groupsOn()))return '';
+  const n=state.groups.length;
+  return `<button class="groupsbar" data-act="groups"><span class="gb-ic" aria-hidden="true">👥</span><span class="gb-t">${n?'הקבוצות שלי':'קבוצות: יציאות פרטיות לחבורה'}</span>${n?`<span class="gb-n">${n}</span>`:'<span class="gb-n plus">+</span>'}</button>`;
+}
+function groupsHTML(){
+  const rows=state.groups.length
+    ?state.groups.map(g=>`<button class="grow" data-act="group-open" data-g="${esc(g.id)}"><span class="gname">👥 ${esc(g.name)}</span><span class="gcount">${g.members.length} ${g.members.length===1?'חבר':'חברים'}</span><span class="chev" aria-hidden="true">‹</span></button>`).join('')
+    :'<p class="dash" style="margin:0 0 6px">עוד לא הצטרפת לאף קבוצה.</p>';
+  return `<div class="grab"></div>
+    <div class="dhead"><h2 class="dt">הקבוצות שלי</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
+    <p class="shsub">יציאות פרטיות שרק חברי הקבוצה רואים. יוצרים קבוצה ושולחים בוואטסאפ קישור הצטרפות.</p>
+    <div class="glist">${rows}</div>
+    <div class="fl">קבוצה חדשה</div>
+    <div class="dtrow"><input class="txt" id="g-new" maxlength="30" placeholder="לדוגמה: נשמות" autocomplete="off" enterkeyhint="done" aria-label="שם הקבוצה"><button class="ch" data-act="group-create">+ צור</button></div>`;
+}
+function groupHTML(g){
+  const url=groupInviteUrl(g);
+  const mem=[...g.members].sort((a,b)=>a.localeCompare(b,'he')).map(n=>`<div class="mrow2">${avEl(n,me&&n===me.name?' me':'')}<span>${esc(n)}${me&&n===me.name?' <span class="dash">(אני)</span>':''}</span></div>`).join('');
+  return `<div class="grab"></div>
+    <div class="dhead"><button class="x back" data-act="groups" aria-label="חזרה">›</button><div class="ctxt"><h2 class="dt">👥 ${esc(g.name)}</h2><div class="cwhen">${g.members.length} ${g.members.length===1?'חבר':'חברים'}</div></div><button class="x" data-act="close" aria-label="סגור">✕</button></div>
+    <div class="grp"><div class="gh">🔗 קישור הצטרפות</div>
+      ${url?`<div class="invurl" dir="ltr">${esc(url)}</div>
+      <div class="actrow"><button class="actbtn wa" data-act="group-share" data-g="${esc(g.id)}">שליחה בוואטסאפ</button><button class="actbtn" data-act="group-copy" data-g="${esc(g.id)}">העתקת קישור</button></div>`
+      :'<p class="dash">אין כתובת אתר מוגדרת (SHARE_URL ב-config.js).</p>'}
+      <p class="gnote" style="margin:8px 0 0">כל מי שיש לו את הקישור יכול להצטרף. שלחו אותו רק למי שאתם רוצים בקבוצה.</p></div>
+    <div class="grp"><div class="gh">חברים <span class="n">${g.members.length}</span></div><div class="mlist">${mem}</div></div>
+    <button class="del" data-act="group-leave" data-g="${esc(g.id)}">יציאה מהקבוצה</button><div class="pad"></div>`;
+}
+function openGroups(){
+  if(!me||!state.ready){toast('רגע, הלוח נטען');return}
+  if(!state.groupsOk){toast('צריך להריץ את supabase-migration-v7.sql');return}
+  openSheet(groupsHTML());view={type:'groups'};
+}
+function openGroup(id){
+  const g=state.groups.find(x=>x.id===id);if(!g)return;
+  openSheet(groupHTML(g));view={type:'group',id};
+}
+function createGroupNow(){
+  const inp=$('#g-new');if(!inp||!me)return;
+  const name=inp.value.replace(/\s+/g,' ').trim().slice(0,30);if(!name){inp.focus();return}
+  inp.value='';
+  enqueue(()=>store.createGroup(name)).then(id=>{toast('הקבוצה נוצרה ✓');if(id)openGroup(String(id).replace(/"/g,''))}).catch(writeFail);
+}
+async function shareGroup(id,copy){
+  const g=state.groups.find(x=>x.id===id);if(!g)return;
+  const url=groupInviteUrl(g);if(!url)return;
+  if(copy){try{await navigator.clipboard.writeText(url);toast('הקישור הועתק')}catch(e){toast('לא הצלחנו להעתיק')}return}
+  const text=`הצטרפו לקבוצה ״${g.name}״ ביוצאים: ${url}`;
+  if(navigator.share&&IS_MOBILE){try{await navigator.share({text});return}catch(e){if(e&&e.name==='AbortError')return}}
+  window.open('https://wa.me/?text='+encodeURIComponent(text),'_blank','noopener');
+}
+function leaveGroup(el){
+  const id=el.dataset.g;
+  if(!el.dataset.armed){
+    el.dataset.armed='1';el.textContent='לצאת? לא תראו יותר את היציאות הפרטיות שלה. לחצו שוב';
+    setTimeout(()=>{if(el.isConnected){delete el.dataset.armed;el.textContent='יציאה מהקבוצה'}},4000);return;
+  }
+  enqueue(()=>store.leaveGroup(id)).then(()=>{toast('יצאת מהקבוצה');openGroups()}).catch(writeFail);
+}
+// Someone opened a group invite link: show what they're joining, and join on one tap
+let inviteBusy=false;
+async function maybeOpenInvite(){
+  if(!pendingGroupToken||!me||!profileOk||!store||!store.groupPreview||sheetEl||inviteBusy)return;
+  inviteBusy=true;
+  try{
+    const p=await store.groupPreview(pendingGroupToken);
+    if(!p){toast('הקישור לא תקין או שפג תוקפו');clearGroupLink();return}
+    if(p.is_member){clearGroupLink();toast('אתה כבר בקבוצה ״'+p.name+'״');return}
+    openSheet(`<div class="grab"></div><div class="pad" style="text-align:center">
+      <div class="inv-k">הוזמנת להצטרף לקבוצה 👋</div><div class="inv-t">👥 ${esc(p.name)}</div>
+      <div class="inv-w">${p.members} ${p.members===1?'חבר':'חברים'} · תראו את היציאות הפרטיות שלה</div>
+      <button class="submit" data-act="group-join">הצטרפות לקבוצה</button>
+      <button class="cancel wide" data-act="group-later">לא עכשיו</button></div>`);
+    view={type:'invite',name:p.name};
+  }catch(e){if(e&&e.code!=='unavailable')writeFail(e)}
+  finally{inviteBusy=false}
+}
+function joinGroupNow(){
+  const token=pendingGroupToken,name=view&&view.name;if(!token)return;
+  enqueue(()=>store.joinGroup(token)).then(id=>{
+    clearGroupLink();closeSheet();toast('הצטרפת ל״'+(name||'קבוצה')+'״ ✓');
+  }).catch(e=>{if(e&&e.msg==='YZ_BAD_INVITE')clearGroupLink();writeFail(e)});
+}
+
+/* audience picker inside the "new outing" form */
+function paintAudience(){
+  const box=$('#f-aud');if(!box||!form)return;
+  const on=form.groupIds;
+  box.innerHTML=`<button class="ch${on.length?'':' on'}" data-act="aud" data-g="" aria-pressed="${!on.length}">🌍 כולם</button>`
+    +state.groups.map(g=>{const a=on.includes(g.id);return `<button class="ch${a?' on':''}" data-act="aud" data-g="${esc(g.id)}" aria-pressed="${a}">👥 ${esc(g.name)}</button>`}).join('')
+    +(on.length?'<p class="gnote aud-note">🔒 רק חברי הקבוצה יראו את היציאה הזו.</p>':'');
+}
+function toggleAudience(g){
+  if(!form)return;
+  if(!g)form.groupIds=[];
+  else{const i=form.groupIds.indexOf(g);if(i>=0)form.groupIds.splice(i,1);else form.groupIds.push(g)}
+  paintAudience();
+}
+
+/* equipment: rename an item in place */
+let eqEdit=null;
+function startEquipEdit(itemId){eqEdit=itemId;refreshSheet();const i=$('#eq-edit');if(i){i.focus();i.select()}}
+function saveEquipEdit(eventId){
+  const i=$('#eq-edit');if(!i)return;
+  const v=i.value.trim().slice(0,40),item=eqEdit;eqEdit=null;
+  if(!v){refreshSheet();return}
+  enqueue(()=>store.renameEquipmentItem(eventId,item,v)).then(()=>toast('עודכן ✓')).catch(writeFail);
+  refreshSheet();
+}
+
 function saveRename(){
   const name=$('#r-name').value.trim().slice(0,20);
   if(!name)return;
@@ -1195,6 +1517,7 @@ function saveRename(){
 function deleteEvent(el){
   const ev0=state.events.find(e=>e.id===el.dataset.id);
   if(ev0&&ev0.when+PAST_AFTER<Date.now()){toast('אי אפשר למחוק יציאה שכבר עברה');return}
+  if(ev0&&(!me||ev0.by!==me.id)){toast('רק מי שיצר את היציאה יכול למחוק אותה');return}
   if(!el.dataset.armed){
     el.dataset.armed='1';el.classList.add('armed');el.textContent='בטוחים? לחצו שוב למחיקה';
     setTimeout(()=>{if(el.isConnected){delete el.dataset.armed;el.classList.remove('armed');el.textContent='🗑️ מחק יציאה'}},4000);
@@ -1213,8 +1536,8 @@ function setRsvp(id,s){
   // Only "going" people can be in a car: anything else takes them out (the store + database do it; we just say so)
   const role=s!=='yes'?rideRole(ev,me.id):null;
   tapped=id+'|'+s;setTimeout(()=>{tapped=null},700);
-  if(s==='yes'){celebrate();toast('נרשמת ✓ מצפים לראותך!')}
   enqueue(()=>store.setRsvp(id,me.id,s)).then(()=>{
+    if(s==='yes'){celebrate();toast('אחלה! אתה בא 🎉')}   // only after the server confirmed it
     if(!role)return;
     if(role.type==='passenger')toast('יצאת מהרכב של '+role.ride.driver);
     else{const n=role.ride.passengers.length;toast(n?'הרכב שלך בוטל · '+(n===1?'הנוסע חזר':n+' נוסעים חזרו')+' לרשימת ״ללא רכב״':'הרכב שלך בוטל')}
@@ -1251,9 +1574,11 @@ function submitGate(){
   LS.set('yotz.me',JSON.stringify(me));
   $('#gate').remove();
   render();maybeOpenDeepLink();
+  if(store)ensureProfile();   // (if the board is still loading, boot() does it once it is ready)
 }
 
 /* ---------- ratings: optional, only inside a past outing, only for people who were there ---------- */
+let ratingFlash=null;   // the outing whose rating was just saved (drives the short highlight)
 let ratingDraft=null;   // keeps a half-typed comment alive while the sheet re-renders
 function ratingHTML(ev){
   if(store&&store.ratingsOk&&!store.ratingsOk())return '';   // the ratings table isn't set up yet: no UI
@@ -1267,22 +1592,25 @@ function ratingHTML(ev){
   const stars=d?d.stars:(my?my.stars:0);
   const comment=d?d.comment:(my?my.comment:'');
   const st=[1,2,3,4,5].map(i=>`<button class="star${i<=stars?' on':''}" data-act="rate" data-id="${esc(ev.id)}" data-v="${i}" aria-label="${i} מתוך 5" aria-pressed="${i===stars}">★</button>`).join('');
+  const state_=d&&d.saving?`<div class="rstate saving" role="status">שומר…</div>`
+    :(my?`<div class="rstate saved${ratingFlash===ev.id?' flash':''}" role="status"><span class="ok">✓</span> הדירוג שלך נשמר · ${'★'.repeat(my.stars)}${'☆'.repeat(5-my.stars)}</div>`:'');
   const more=stars
-    ?`<textarea class="txt area" id="r-comment" maxlength="300" placeholder="מה אהבתם ומה פחות? (לא חובה)">${esc(comment)}</textarea>
+    ?`${state_}<textarea class="txt area" id="r-comment" maxlength="300" placeholder="מה אהבתם ומה פחות? (לא חובה)">${esc(comment)}</textarea>
       <button class="actbtn rsave" data-act="rate-save" data-id="${esc(ev.id)}">שמירת ההערה</button>`
     :'<p class="dash" style="margin:0">לא חובה. זה עוזר להציע רעיונות שמתאימים לכם.</p>';
-  return `<div class="grp rating"><div class="gh">⭐ איך הייתה היציאה? ${summary}</div><div class="stars" role="group" aria-label="דירוג">${st}</div>${more}</div>`;
+  return `<div class="grp rating"><div class="gh">⭐ איך הייתה היציאה? ${summary}</div><div class="stars${ratingFlash===ev.id?' flash':''}" role="group" aria-label="דירוג">${st}</div>${more}</div>`;
 }
 function rateStars(id,v){
   if(!me||!(v>=1&&v<=5))return;
   const ev=state.events.find(e=>e.id===id);if(!ev)return;
   const ta=$('#r-comment');
   const comment=(ta?ta.value:(ratingDraft&&ratingDraft.id===id?ratingDraft.comment:((ev.ratings[me.id]||{}).comment||''))).trim();
-  ratingDraft={id,stars:v,comment};
-  celebrate();
-  toast('דירוג נשמר ✓');
-  enqueue(()=>store.setRating(id,me.id,v,comment)).then(()=>{ratingDraft=null})
-    .catch(e=>{ratingDraft=null;writeFail(e);refreshSheet()});
+  ratingDraft={id,stars:v,comment,saving:true};
+  refreshSheet();
+  enqueue(()=>store.setRating(id,me.id,v,comment)).then(()=>{
+    ratingDraft=null;ratingFlash=id;setTimeout(()=>{if(ratingFlash===id){ratingFlash=null;refreshSheet()}},2600);
+    celebrate();toast('הדירוג נשמר ✓');refreshSheet();
+  }).catch(e=>{ratingDraft=null;writeFail(e);refreshSheet()});
 }
 function saveComment(id){
   if(!me)return;
@@ -1418,17 +1746,68 @@ function recCard(r,i){
     <p class="rdesc">${esc(r.description)}</p>
     ${r.why?`<div class="rwhy"><b>למה זה מתאים לכם</b>${esc(r.why)}</div>`:''}
     ${chips?`<div class="rchips">${chips}</div>`:''}${src}
-    <div class="actrow">${q?`<button class="actbtn" data-act="ai-nav" data-i="${i}">📍 נווט</button>`:''}<a class="actbtn" href="${esc(safeHref(AI.moreInfoUrl(r)))}" target="_blank" rel="noopener noreferrer">${AI.infoLabel(r)}</a></div>
+    <div class="actrow">${q?`<button class="actbtn" data-act="ai-nav" data-i="${i}">📍 נווט</button>`:''}<button class="actbtn" data-act="ai-more" data-i="${i}">ℹ️ מידע נוסף</button></div>
     <button class="rcreate" data-act="ai-create" data-i="${i}">➕ צור יציאה</button>
   </article>`;
 }
 function openAIResults(){
   const res=aiState.res;if(!res){openAIForm();return}
   openSheet(`<div class="grab"></div><div class="dhead"><h2 class="dt">✨ רעיונות ליציאה</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
-    <p class="shsub">${esc(res.intro)}</p>${res.general?'<p class="gnote" style="margin:8px 0 0">לא הצלחנו להביא מידע עדכני מהרשת, אז אלה רעיונות כלליים. כדאי לבדוק לפני שיוצאים.</p>':''}${res.recs.map(recCard).join('')}
+    <p class="shsub">${esc(res.intro)}</p>${windowNote(res)}${res.general?'<p class="gnote" style="margin:8px 0 0">לא הצלחנו להביא מידע עדכני מהרשת, אז אלה רעיונות כלליים. כדאי לבדוק לפני שיוצאים.</p>':''}${res.recs.map(recCard).join('')}
     <div class="pad"><button class="cancel wide" data-act="ai-form">🔄 חיפוש חדש</button>
     <p class="gnote">כדאי לבדוק פרטים לפני שיוצאים: מחירים ושעות עלולים להשתנות.</p></div>`);
   view={type:'ai-results'};
+}
+// Which dates the search covered: near-term by default, the user's own range when they asked for one
+function windowNote(res){
+  const w=res.window;if(!w)return '';
+  const f=x=>{const [y,m,d]=x.split('-').map(Number);return ddmm(new Date(y,m-1,d))};
+  return `<p class="winnote">📅 ${w.explicit?'לפי הבקשה שלך':'בקרוב'}: ${f(w.from)}–${f(w.to)}${w.explicit?'':' · אפשר לבקש תקופה אחרת בתיאור החיפוש'}</p>`;
+}
+/* "More information": facts about THIS recommendation only. The server gets its own data (never a generic question). */
+const aiDetails=new Map();   // ref -> details, so a second tap is instant
+function detailRow(icon,label,val){return val?`<div class="drow"><span class="dic" aria-hidden="true">${icon}</span><div><b>${label}</b><span>${esc(val)}</span></div></div>`:''}
+function detailList(icon,label,arr){return arr.length?`<div class="drow"><span class="dic" aria-hidden="true">${icon}</span><div><b>${label}</b><ul>${arr.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div></div>`:''}
+function detailsHTML(r,d,i){
+  const when=r.date?(()=>{const [y,m,dd]=r.date.split('-').map(Number);return ddmm(new Date(y,m-1,dd))+(r.time?' · '+r.time:'')})():null;
+  const where=[r.venue,r.address||r.location].filter(Boolean).join(' · ')||null;
+  const LBL={meeting_point:'נקודת מפגש',duration:'משך',difficulty:'רמת קושי',price:'מחיר',organizer:'מארגן',bring:'מה להביא',requirements:'ציוד ותנאים נדרשים',instructions:'הוראות חשובות'};
+  const miss=d.unknown.filter(k=>LBL[k]).map(k=>LBL[k]);
+  const src=r.sources.length?`<p class="gnote srcline">מקור המידע: ${r.sources.slice(0,3).map(s=>`<a href="${esc(safeHref(s.url))}" target="_blank" rel="noopener noreferrer" dir="ltr">${esc(AI.sourceLabel(s))}</a>`).join(' · ')}</p>`:'';
+  return `<div class="grab"></div>
+    <div class="dhead"><button class="x back" data-act="ai-results" aria-label="חזרה לרעיונות">›</button><div class="ctxt"><h2 class="dt">${esc(r.name)}</h2><div class="cwhen">${r.type?esc(r.type):'פרטים על היציאה'}</div></div><button class="x" data-act="close" aria-label="סגור">✕</button></div>
+    <p class="descr" style="margin-top:0">${esc(d.summary)}</p>
+    <div class="dlist">
+      ${detailRow('📍','איפה',where)}${detailRow('🕐','מתי',when?when:(r.isEvent?'התאריך לא אומת':null))}
+      ${detailRow('🧭','נקודת מפגש',d.meeting_point)}${detailRow('⏱️','משך',d.duration)}${detailRow('🥾','רמת קושי',d.difficulty)}
+      ${detailRow('💰','מחיר',d.price||r.cost)}${detailRow('🎂','גיל',d.age_restriction||r.age)}${detailRow('👤','מארגן',d.organizer)}
+      ${detailList('🎒','מה להביא',d.bring)}${detailList('🧰','ציוד ותנאים נדרשים',d.requirements)}
+      ${detailList('⚠️','הוראות חשובות',d.instructions)}${detailList('ℹ️','עוד פרטים',d.extra)}
+    </div>
+    ${miss.length?`<div class="missing"><b>לא נמצא במקורות:</b> ${esc(miss.join(' · '))}</div>`:''}
+    ${d.pagesRead?'':'<p class="gnote">לא הצלחנו לקרוא את עמוד האירוע עצמו, אז המידע מבוסס על מה שכבר ידוע.</p>'}
+    <div class="actrow">${AI.navQuery(r)?`<button class="actbtn" data-act="ai-nav" data-i="${i}">📍 נווט</button>`:''}</div>
+    <button class="rcreate" data-act="ai-create" data-i="${i}">➕ צור יציאה</button>${src}<div class="pad"></div>`;
+}
+async function openAIMore(i){
+  const r=aiState.res&&aiState.res.recs[i];if(!r||!AI)return;
+  const ref=AI.recRef(r);
+  if(aiDetails.has(ref)){openSheet(detailsHTML(r,aiDetails.get(ref),i));view={type:'ai-more',ref};return}
+  openSheet(`<div class="grab"></div><div class="aiload" role="status" aria-live="polite"><div class="spark" aria-hidden="true">🔎</div>
+    <h2 class="dt">אוספים פרטים על ״${esc(r.name)}״…</h2><p class="why">קוראים את עמוד האירוע ומסכמים לך את מה שחשוב.</p>
+    <div class="skel s3"></div><div class="skel s3"></div>
+    <button class="cancel wide" data-act="ai-results">חזרה לרעיונות</button></div>`);
+  view={type:'ai-more',ref,loading:true};
+  try{
+    const d=await AI.details(r);
+    aiDetails.set(ref,d);
+    if(view&&view.type==='ai-more'&&view.ref===ref){openSheet(detailsHTML(r,d,i));view={type:'ai-more',ref}}   // still looking at this one
+  }catch(e){
+    if(!(view&&view.type==='ai-more'&&view.ref===ref))return;
+    openSheet(`<div class="grab"></div><div class="pad" style="text-align:center"><h2 class="dt">לא הצלחנו להביא פרטים</h2>
+      <p class="shsub">${esc((e&&e.userMsg)||'נסו שוב עוד רגע.')}</p>
+      <button class="submit" data-act="ai-more" data-i="${i}">נסו שוב</button><button class="cancel wide" data-act="ai-results">חזרה לרעיונות</button></div>`);
+  }
 }
 function openAINav(i){
   const r=aiState.res&&aiState.res.recs[i],q=r&&AI.navQuery(r);if(!q)return;
@@ -1533,7 +1912,26 @@ document.addEventListener('click',e=>{
   else if(a==='equip-unclaim')unclaimEquip(id,el.dataset.item);
   else if(a==='equip-del')delEquip(id,el.dataset.item);
   else if(a==='equip-add-live')addEquipLive(id);
+  else if(a==='equip-edit')startEquipEdit(el.dataset.item);
+  else if(a==='equip-save')saveEquipEdit(id);
+  else if(a==='groups')openGroups();
+  else if(a==='group-open')openGroup(el.dataset.g);
+  else if(a==='group-create')createGroupNow();
+  else if(a==='group-share')shareGroup(el.dataset.g,false);
+  else if(a==='group-copy')shareGroup(el.dataset.g,true);
+  else if(a==='group-leave')leaveGroup(el);
+  else if(a==='group-join')joinGroupNow();
+  else if(a==='group-later'){clearGroupLink();closeSheet()}
+  else if(a==='aud')toggleAudience(el.dataset.g);
+  else if(a==='avatar-pick'){const f=$('#p-file');if(f)f.click()}
+  else if(a==='avatar-clear')clearAvatar();
+  else if(a==='code-show')showRecoveryCode(el);
+  else if(a==='recover')recoverName(el.dataset.name);
+  else if(a==='pick-other'){closeSheet();showGate()}
+  else if(a==='ai-more')openAIMore(Number(el.dataset.i));
+  else if(a==='ai-results')openAIResults();
 });
+document.addEventListener('change',e=>{if(e.target.id==='p-file'){const f=e.target.files&&e.target.files[0];e.target.value='';if(f)uploadAvatar(f)}});
 document.addEventListener('input',e=>{
   const t=e.target.id;
   if(t==='ai-wish'&&aiForm)aiForm.wish=e.target.value;
@@ -1552,6 +1950,8 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&e.target.id==='f-place'){e.preventDefault();e.target.blur()}
   if(e.key==='Enter'&&e.target.id==='ai-area-in'){e.preventDefault();addArea()}
   if(e.key==='Enter'&&e.target.id==='f-equip'){e.preventDefault();addEquipDraft()}
+  if(e.key==='Enter'&&e.target.id==='g-new'){e.preventDefault();createGroupNow()}
+  if(e.key==='Enter'&&e.target.id==='eq-edit'){e.preventDefault();if(view&&view.type==='detail')saveEquipEdit(view.id)}
   if(e.key==='Enter'&&e.target.id==='eq-new'){e.preventDefault();if(view&&view.type==='detail')addEquipLive(view.id)}
   if((e.key==='Enter'||e.key===' ')&&e.target.getAttribute&&e.target.getAttribute('role')==='button'){e.preventDefault();e.target.click()}
 });
@@ -1562,13 +1962,14 @@ setInterval(render,60000);
 (async function boot(){
   render();
   // came from a shared link: straight to the name, then the outing (the install offer can wait)
-  if(!me){if(shouldOnboard()&&!pendingEventId)showOnboarding();else showGate()}
+  if(!me){if(shouldOnboard()&&!pendingEventId&&!pendingGroupToken)showOnboarding();else showGate()}
   if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)&&!IS_NATIVE){
     window.addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').catch(()=>{})});
   }
   try{
     store=await makeStore();
-    store.subscribe(setEvents,()=>{state.err=true;render()});
+    store.subscribe(setEvents,()=>{state.err=true;render()},setMeta);
+    if(me)ensureProfile();
   }catch(e){state.err=true;render()}
 })();
 })();

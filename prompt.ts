@@ -14,6 +14,7 @@ Rules:
 - If evidence is thin, give a general idea (an activity type in the requested area) with venue_name = null, address = null, source_ids = [] and a low confidence. Never fill a field just to fill the schema; use null when unknown.
 - Set is_specific_event to true only when this recommendation is a one-time or date-bound happening (a party, show, concert, festival, pop-up) rather than a place that is generally open (an ordinary bar, beach or restaurant). For such an event, extract the actual date (and start time, if given) from the EVIDENCE text itself — never from a generic or recurring schedule, and never guessed. If the evidence does not give a real date for the event, leave event_date null.
 - event_url_source_id: if one of the EVIDENCE items is the specific page for this exact event or venue (a ticket page, an event page, a venue's own page) rather than a general listings page, homepage or search-results page, give its number here so the app can link straight to it. Otherwise null. Only use a number that also appears in source_ids.
+- DATE WINDOW: USER CONTEXT has date_window {from,to,explicit}. Recommend a date-bound event ONLY if its real date (from the evidence) is inside [from,to], and prefer the ones closest to today. Never recommend an event outside the window, and never one that already happened. Places that are simply open (no specific date) are fine. If explicit is false the user did not ask for a period, so the window is the near future by default.
 - Use previous outing history to learn what the group enjoys: favour what was rated highly, avoid what was rated low.
 - Prefer new experiences the group has not already tried, unless a previous outing is currently relevant or the user asked for something similar. Never suggest something already listed with status "planned".
 - Prioritise suggestions that genuinely match the group's preferences and the free-text request. Consider group size and that most people are around the given age.
@@ -63,4 +64,28 @@ EVIDENCE (current web research; the only source of facts you may use):
 ${ev}
 ${retryHebrew ? "\nYour previous answer contained user-facing text that was not Hebrew. Rewrite every user-facing value in Hebrew.\n" : ""}
 Return the JSON object now.`;
+}
+
+
+/* ---------- "More information" about ONE selected outing ---------- */
+export const DETAILS_SYSTEM_PROMPT = `You explain ONE specific outing to a user, in Hebrew.
+You get ITEM (facts the app already holds about this exact outing) and PAGES (text extracted from that outing's own source pages; it may be empty).
+Rules:
+- Use ONLY ITEM and PAGES. Never use general knowledge about the activity type, and never invent times, places, prices, organizers, difficulty, durations or equipment.
+- If something is not stated in ITEM or PAGES, use null (or an empty array) and list its key in "unknown".
+- Do NOT tell the user to visit the website and do NOT paste page text: write the useful facts yourself, briefly and clearly.
+- Write everything user-facing in Hebrew (names of places may stay as written).
+Return ONLY one JSON object:
+{
+  "summary": "1-2 Hebrew sentences: what this outing is",
+  "meeting_point": string|null, "duration": string|null, "difficulty": string|null, "price": string|null,
+  "organizer": string|null, "age_restriction": string|null,
+  "bring": [short strings] , "requirements": [short strings about required gear/conditions],
+  "instructions": [short strings, important instructions], "extra": [short strings, other relevant facts from the sources],
+  "unknown": [subset of "meeting_point","duration","difficulty","price","organizer","bring","requirements","instructions"]
+}`;
+
+export function buildDetailsPrompt(item: unknown, pages: { url: string; text: string }[]): string {
+  const p = pages.length ? pages.map((x, i) => `[page ${i + 1}] ${x.url}\n${x.text}`).join("\n\n") : "(no page text available)";
+  return `ITEM (JSON):\n${JSON.stringify(item)}\n\nPAGES:\n${p}\n\nReturn the JSON object now.`;
 }

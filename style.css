@@ -388,3 +388,63 @@ textarea{-webkit-user-select:text;user-select:text}
 
 .aihint{display:inline-flex;align-items:center;gap:6px;margin:10px 0 0;padding:6px 12px;border-radius:99px;background:var(--chip);color:var(--ink-2);font-weight:700;font-size:13.5px}
 .aihint:active{transform:scale(.97)}
+
+/* ---- profile pictures: same round shape as the initials avatar ---- */
+.av.pic{background:var(--chip);overflow:hidden;padding:0}
+.av.pic img{width:100%;height:100%;object-fit:cover;display:block}
+.av.big{width:72px;height:72px;font-size:28px;margin:0;flex:none}
+.av.sm{width:22px;height:22px;font-size:11px;margin:0;vertical-align:middle}
+.who{display:inline-flex;align-items:center;gap:6px}
+.pform{display:flex;align-items:center;gap:14px;margin:4px 0 10px}
+.pbtns{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.codebox{display:flex;align-items:center;gap:10px}
+.code{flex:1;font-family:ui-monospace,Menlo,monospace;font-weight:800;letter-spacing:.08em;background:var(--chip);border-radius:12px;padding:10px 12px}
+
+/* ---- attendance is unmistakable on every upcoming card ---- */
+.card.ev.going{box-shadow:inset 0 0 0 2px var(--yes)}
+.mine.yes{background:var(--yes);color:#fff;font-weight:800;border-radius:99px;padding:5px 11px;font-size:13px;white-space:nowrap}
+.card.ev.going .cbtn.done{background:var(--yes);color:#fff}
+
+/* ---- crew label on outing cards ---- */
+.gbadge{display:inline-block;margin-inline-start:6px;font-size:12px;font-weight:800;padding:2px 9px;border-radius:99px;background:rgba(139,124,246,.16);color:#6B5BE0;vertical-align:middle}
+@media (prefers-color-scheme:dark){.gbadge{color:#B8ADFF}}
+
+/* ---- groups ---- */
+.groupsbar{display:flex;align-items:center;gap:10px;width:100%;margin:0 0 16px;padding:11px 14px;border-radius:16px;background:var(--surface);border:1px solid var(--line);text-align:start;font-weight:700}
+.gb-ic{font-size:18px}.gb-t{flex:1}
+.gb-n{min-width:24px;height:24px;border-radius:99px;display:grid;place-items:center;background:var(--chip);font-size:13px;font-weight:800;padding:0 7px}
+.gb-n.plus{background:var(--ink);color:var(--surface)}
+.glist{display:flex;flex-direction:column;gap:8px;margin-bottom:6px}
+.grow{display:flex;align-items:center;gap:10px;padding:13px 14px;border-radius:14px;background:var(--chip);text-align:start;width:100%}
+.gname{flex:1;font-weight:800}.gcount{color:var(--ink-2);font-weight:600;font-size:13.5px}.chev{opacity:.5;font-size:20px}
+.invurl{font-size:12.5px;word-break:break-all;background:var(--chip);border-radius:12px;padding:10px 12px;margin:2px 0 10px;color:var(--ink-2)}
+.actbtn.wa{background:#25D366;color:#fff}
+.mlist{display:flex;flex-direction:column;gap:8px}
+.mrow2{display:flex;align-items:center;gap:10px;font-weight:700}.mrow2 .av{margin:0}
+.x.back{font-size:24px;font-weight:700}
+.aud-note{flex-basis:100%;margin:6px 0 0}
+#f-aud{display:flex;flex-wrap:wrap;gap:8px}
+.inv-k{color:var(--ink-2);font-weight:700;margin-top:6px}.inv-t{font-size:24px;font-weight:800;margin:6px 0}.inv-w{color:var(--ink-2);margin-bottom:16px}
+
+/* ---- rating: a saved state you can't miss ---- */
+.rstate{display:flex;align-items:center;gap:8px;margin:10px 0;padding:9px 12px;border-radius:12px;font-weight:800;font-size:14.5px}
+.rstate.saved{background:var(--yes-bg);color:var(--yes)}
+.rstate.saving{background:var(--chip);color:var(--ink-2)}
+.rstate .ok{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--yes);color:#fff;font-size:12px}
+.rstate.flash{animation:rflash .9s ease-out}
+.stars.flash .star.on{animation:rstar .5s ease-out}
+@keyframes rflash{0%{transform:scale(.96);box-shadow:0 0 0 0 rgba(52,199,89,.5)}60%{transform:scale(1.02);box-shadow:0 0 0 8px rgba(52,199,89,0)}100%{transform:none}}
+@keyframes rstar{0%{transform:scale(1)}40%{transform:scale(1.25)}100%{transform:scale(1)}}
+.pravg.mine{color:var(--yes)}
+
+/* ---- AI: date window note + "more information" sheet ---- */
+.winnote{margin:8px 0 0;font-weight:700;font-size:13.5px;color:var(--ink-2)}
+.dlist{display:flex;flex-direction:column;gap:12px;margin:14px 0}
+.drow{display:flex;gap:12px;align-items:flex-start}
+.dic{flex:none;width:34px;height:34px;border-radius:11px;background:var(--chip);display:grid;place-items:center;font-size:17px}
+.drow b{display:block;font-size:13px;color:var(--ink-2);font-weight:700}
+.drow span:not(.dic),.drow ul{font-weight:700;margin:2px 0 0}
+.drow ul{padding-inline-start:18px}
+.missing{background:var(--maybe-bg);color:var(--maybe);border-radius:12px;padding:10px 12px;font-size:13.5px;margin:6px 0 12px}
+.srcline{margin-top:12px}
+.eqedit{flex:1;min-width:0;height:38px}
