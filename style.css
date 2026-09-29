@@ -38,8 +38,8 @@ button{font:inherit;color:inherit;border:0;background:none;cursor:pointer;paddin
 
 .app{max-width:520px;margin:0 auto;padding:18px 16px 130px}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:2px 2px 4px}
-.hdract{display:flex;align-items:center;gap:8px;min-width:0}
-.who{background:var(--surface);border:1px solid var(--line);border-radius:99px;padding:8px 14px;font-weight:700;font-size:14.5px;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hdract{display:flex;align-items:center;gap:8px;min-width:0;flex:1 1 auto;justify-content:flex-end}
+.who{background:var(--surface);border:1px solid var(--line);border-radius:99px;padding:8px 14px;font-weight:700;font-size:14.5px;min-width:0;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .brand{font:400 32px/1 var(--display);margin:0}
 .bell{position:relative;flex:0 0 auto;width:40px;height:40px;display:flex;align-items:center;justify-content:center;background:var(--surface);border:1px solid var(--line);border-radius:99px;font-size:19px;line-height:1}
 .bell .dot{position:absolute;top:-2px;left:-2px;min-width:18px;height:18px;padding:0 4px;border-radius:99px;background:#e5484d;color:#fff;font:800 11px/18px var(--display),system-ui;text-align:center;box-shadow:0 0 0 2px var(--bg)}
