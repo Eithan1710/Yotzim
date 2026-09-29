@@ -77,7 +77,8 @@ const RULE_ERR={
   YZ_ITEM_NOT_FOUND:'הפריט הזה כבר לא קיים',
   YZ_NAME_TAKEN:'השם הזה כבר תפוס',YZ_BAD_NAME:'השם לא תקין',YZ_BAD_CODE:'הקוד לא נכון',
   YZ_BAD_INVITE:'הקישור לא תקין או שפג תוקפו',YZ_NO_PROFILE:'צריך קודם לבחור שם',YZ_FORBIDDEN:'אין לך הרשאה לפעולה הזו',
-  YZ_DELETE_FORBIDDEN:'רק מי שיצר את היציאה יכול למחוק אותה',YZ_EDIT_FORBIDDEN:'אין לך הרשאה לערוך את היציאה הזו'
+  YZ_DELETE_FORBIDDEN:'רק מי שיצר את היציאה יכול למחוק אותה',YZ_EDIT_FORBIDDEN:'אין לך הרשאה לערוך את היציאה הזו',
+  YZ_DAILY_LIMIT:'הגעתם למגבלה של 3 יציאות ביום. אפשר ליצור יציאה נוספת מחר 🌅'
 };
 
 /* ---------- identity: just a name, kept in localStorage ---------- */
@@ -86,13 +87,16 @@ try{const m=JSON.parse(LS.get('yotz.me')||'null');if(m&&m.name)me={id:m.name,nam
 const myId=()=>me?me.id:null;
 
 /* ---------- state ---------- */
-const state={people:[],events:[],ready:false,mode:null,err:false,avatars:{},groups:[],groupsOk:false};
+const state={people:[],events:[],ready:false,mode:null,err:false,avatars:{},groups:[],groupsOk:false,profiles:[],notifications:[],notificationsOk:false};
 let metaSig='';
 function setMeta(m){
-  const sig=JSON.stringify([m.avatars,m.groups]);
+  const sig=JSON.stringify([m.avatars,m.groups,m.profiles,m.notifications]);
   state.groupsOk=!!(m.ok&&m.ok.groups);
+  state.notificationsOk=!!(m.ok&&m.ok.notifications);
   if(sig===metaSig)return;
-  metaSig=sig;state.avatars=m.avatars||{};state.groups=m.groups||[];
+  metaSig=sig;state.avatars=m.avatars||{};state.groups=m.groups||[];state.profiles=m.profiles||[];
+  notifyNewOnes(state.notifications,m.notifications||[]);
+  state.notifications=m.notifications||[];
   render();refreshSheet();maybeOpenInvite();
 }
 let store=null;
@@ -141,7 +145,7 @@ function setEvents(o,fresh){
     })).filter(r=>r.driver):[];
     return{id:String(id),kind:has(KINDS,v.kind)?v.kind:'other',place:String(v.place||'').slice(0,80),when:Number(v.when)||0,
       transport:has(TRANSPORT,v.transport)?v.transport:'unknown',
-      description:String(v.description||'').slice(0,500),by:v.by?String(v.by):null,
+      description:String(v.description||'').slice(0,500),by:v.by?String(v.by):null,createdAt:v.createdAt||null,
       rsvps:rs,rides,ratings:cleanRatings(v.ratings),equipment:cleanEquipment(v.equipment),
       groupIds:Array.isArray(v.groupIds)?v.groupIds.map(String):[],priv:!!v.priv};
   }).filter(e=>e.when);
@@ -345,6 +349,8 @@ function makeSupabase(url,key){
     const equipP=api('GET','equipment_items?select=id,event_id,name,added_by,assigned_to').catch(()=>null);
     const profP=api('GET','profiles?select=name,avatar_path,avatar_v').catch(()=>null);
     const grpP=api('GET','groups?select=id,name,invite_token,group_members(member_name)').catch(()=>null);
+    // RLS scopes this to the signed-in device's own name automatically - no explicit filter needed
+    const notifP=api('GET','notifications?select=id,event_id,created_at,read_at&order=created_at.desc&limit=60').catch(()=>null);
     const rows=await api('GET','events?select=*,participants(name,status),event_groups(group_id),rides(id,driver_name,available_seats,pickup_location,note,ride_passengers(passenger_name))&date=gte.'+iso(since)+'&order=date.asc,time.asc');
     if(pending)return;
     const rr=await ratingsP;
@@ -363,19 +369,21 @@ function makeSupabase(url,key){
       const rides=(e.rides||[]).map(r=>({id:r.id,driver:r.driver_name,seats:r.available_seats,
         pickup:r.pickup_location||'',note:r.note||'',passengers:(r.ride_passengers||[]).map(p=>p.passenger_name)}));
       events[e.id]={kind:kindFromLabel(e.type),place:e.title||e.location,when:new Date(y,m-1,d,hh,mm).getTime(),
-        transport:trFromLabel(e.transport),description:e.description||'',by:e.created_by||null,rsvps:rs,rides,ratings:rmap[e.id]||{},equipment:emap[e.id]||[],
+        transport:trFromLabel(e.transport),description:e.description||'',by:e.created_by||null,createdAt:e.created_at||null,rsvps:rs,rides,ratings:rmap[e.id]||{},equipment:emap[e.id]||[],
         groupIds:(e.event_groups||[]).map(g=>g.group_id),priv:!!e.is_private};
     });
     firstDone=true;
+    // events land in state (via emit/setEvents) before the meta callback runs, so a brand-new outing that
+    // just triggered a notification is already in state.events when notifyNewOnes looks it up below
+    const sig=JSON.stringify(events);
+    if(sig!==lastSig){lastSig=sig;cache=events;LS.set('yotz.cache.v1',sig);emit();}
     if(onM){
-      const pr=await profP,gr=await grpP,base=url+'/storage/v1/object/public/avatars/';
+      const pr=await profP,gr=await grpP,nt=await notifP,base=url+'/storage/v1/object/public/avatars/';
       const avatars={};(pr||[]).forEach(x=>{if(x.avatar_path)avatars[x.name]=base+encodeURIComponent(x.avatar_path)+'?v='+x.avatar_v});
       const groups=(gr||[]).map(g=>({id:g.id,name:g.name,token:g.invite_token,members:(g.group_members||[]).map(m=>m.member_name)}));
-      onM({avatars,groups,profiles:(pr||[]).map(x=>x.name),ok:{avatars:pr!==null,groups:gr!==null}});
+      const notifications=(nt||[]).map(x=>({id:String(x.id),eventId:String(x.event_id),createdAt:x.created_at,readAt:x.read_at}));
+      onM({avatars,groups,profiles:(pr||[]).map(x=>x.name),notifications,ok:{avatars:pr!==null,groups:gr!==null,notifications:nt!==null}});
     }
-    const sig=JSON.stringify(events);
-    if(sig===lastSig)return;
-    lastSig=sig;cache=events;LS.set('yotz.cache.v1',sig);emit();
   }
   async function write(opt,fn){
     pending++;let out;
@@ -429,6 +437,8 @@ function makeSupabase(url,key){
       ()=>api('DELETE','events?id=eq.'+encodeURIComponent(id),null,'return=representation').then(r=>{
         if(!r||!r.length){const e=new Error('forbidden');e.code='forbidden';e.msg='YZ_DELETE_FORBIDDEN';throw e}
       })),
+    /* notifications: created server-side (trigger on a new outing); the client only ever marks them read */
+    markNotificationsRead:ids=>write(null,()=>rpc('mark_notifications_read',{p_ids:ids.map(Number)})),
     /* profile: name <-> this device, optional picture, recovery code for a new device */
     claimProfile:name=>rpc('claim_profile',{p_name:name}),
     recoverProfile:(name,code)=>rpc('recover_profile',{p_name:name,p_code:code}),
@@ -643,9 +653,24 @@ function showOnboarding(){
 }
 
 /* ---------- views ---------- */
+// Who counts as the "audience" for an outing, for the yes/maybe/no/haven't-responded breakdown:
+// only that group's members for a group outing, everyone (all claimed profiles) for a public one.
+// Either way, the creator and anyone who already responded are always included, even if they since
+// left the group or haven't claimed a profile - so nobody who took an action just disappears from view.
+function audiencePool(ev){
+  const names=new Set();
+  if(ev.groupIds&&ev.groupIds.length){
+    ev.groupIds.forEach(id=>{const grp=state.groups.find(x=>x.id===id);if(grp)grp.members.forEach(n=>names.add(n))});
+  }else{
+    (state.profiles.length?state.profiles:state.people.map(p=>p.id)).forEach(n=>names.add(n));
+  }
+  if(ev.by)names.add(ev.by);
+  for(const n in ev.rsvps)names.add(n);
+  return [...names].sort((a,b)=>a.localeCompare(b,'he')).map(n=>({id:n,name:n}));
+}
 function groups(ev){
   const g={yes:[],maybe:[],no:[],none:[]};
-  for(const p of state.people){const s=ev.rsvps[p.id];(s?g[s]:g.none).push(p)}
+  for(const p of audiencePool(ev)){const s=ev.rsvps[p.id];(s?g[s]:g.none).push(p)}
   return g;
 }
 const cn=g=>
@@ -747,9 +772,10 @@ function prow(ev){
       </div>
     </div>${cta}</article>`;
 }
-const head=()=>'<header class="top"><h1 class="brand">יוצאים?</h1>'+
+const head=()=>'<header class="top"><h1 class="brand">יוצאים?</h1><div class="hdract">'+
+  bellHTML()+
   (me?`<button class="who" data-act="rename" aria-label="הפרופיל שלי">${state.avatars[me.name]?avEl(me.name,' sm'):'👤'} ${esc(me.name)}</button>`
-    :'<button class="who" data-act="pick-other">בחירת שם</button>')+'</header>';
+    :'<button class="who" data-act="pick-other">בחירת שם</button>')+'</div></header>';
 
 function render(){
   const app=$('#app');if(!app)return;
@@ -778,11 +804,12 @@ function render(){
 
 /* ---------- sheets ---------- */
 let sheetEl=null,view=null;
-function openSheet(html){
+function openSheet(html,extraClass){
   closeSheet(true);
   const root=document.createElement('div');
   root.innerHTML='<div class="scrim" data-act="close"></div><div class="sheet" role="dialog" aria-modal="true" tabindex="-1"></div>';
   const sh=root.querySelector('.sheet');sh.innerHTML=html;
+  if(extraClass)sh.classList.add(extraClass);
   document.body.appendChild(root);
   sheetEl=root;
   document.documentElement.classList.add('lock');
@@ -1052,7 +1079,7 @@ function detailHTML(ev){
   const k=KINDS[ev.kind],g=groups(ev),my=ev.rsvps[myId()],d=new Date(ev.when);
   const isPast=ev.when+PAST_AFTER<Date.now();
   const sub=(isPast?ddmm(d)+' · '+hhmm(d):whenLabel(ev.when))+(trText(ev)?' · '+trText(ev):'');
-  const canEdit=!isPast&&!!me;                         // anyone who can see the outing may edit it
+  const canEdit=!isPast&&!!me&&ev.by===me.id;         // only its creator may edit it (the database enforces this too)
   const canDelete=!isPast&&!!me&&ev.by===me.id;       // only its creator may delete it (the database enforces this too)
   let h=`<div class="grab"></div><div class="dhead" style="--h:${k.h}"><span class="tile">${k.e}</span>
     <div class="ctxt"><h2 class="dt">${esc(ev.place)}</h2><div class="cwhen">${sub}</div>${groupBadge(ev)}</div>
@@ -1092,6 +1119,7 @@ function refreshSheet(){
     if(!g){openGroups();return}           // left the group (or it vanished): back to the list
     sh.innerHTML=groupHTML(g);sh.scrollTop=st;
   }else if(view.type==='rename'){paintProfileAvatar()}
+  else if(view.type==='notifs'){sh.innerHTML=notifListHTML();sh.scrollTop=st}
 }
 
 /* ---------- create / edit form (same sheet, two modes) ---------- */
@@ -1100,9 +1128,20 @@ function dayModeOf(when){
   const diff=Math.round((sod(new Date(when))-sod(new Date()))/864e5);
   return diff===0?'today':diff===1?'tomorrow':'custom';
 }
+// Same day boundary the server enforces the 3-a-day limit with (Asia/Jerusalem), so the app never blocks
+// someone the server would allow, or the other way around.
+const DAILY_LIMIT=3;
+function outingsCreatedToday(){
+  if(!me)return 0;
+  const today=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Jerusalem'});
+  return state.events.filter(e=>e.by===me.id&&e.createdAt
+    &&new Date(e.createdAt).toLocaleDateString('en-CA',{timeZone:'Asia/Jerusalem'})===today).length;
+}
 function openForm(editEv,draft){
   if(!state.ready||!me){toast('רגע, הלוח נטען');return}
   const editing=!!editEv;
+  // a soft, optimistic check only - the database enforces this for real, so a stale/offline cache can never bypass it
+  if(!editing&&state.mode==='supabase'&&outingsCreatedToday()>=DAILY_LIMIT){toast(RULE_ERR.YZ_DAILY_LIMIT);return}
   const d=editing?new Date(editEv.when):new Date(Math.ceil((Date.now()+10*60e3)/(30*60e3))*(30*60e3));
   form={editId:editing?editEv.id:null,
     kind:editing?editEv.kind:(draft?draft.kind:null),
@@ -1212,6 +1251,7 @@ function submitForm(){
 }
 function openEditForm(id){
   const ev=state.events.find(e=>e.id===id);if(!ev)return;
+  if(!me||ev.by!==me.id){toast('רק מי שיצר את היציאה יכול לערוך אותה');return}   // defense-in-depth; the server enforces this too
   openForm(ev);
 }
 
@@ -1392,6 +1432,80 @@ function groupInviteUrl(g){
   try{const u=new URL(base,location.href);u.search='';u.hash='';u.searchParams.set('g',g.token);return u.toString()}
   catch(e){return base+(base.indexOf('?')>=0?'&':'?')+'g='+encodeURIComponent(g.token)}
 }
+/* ---------- notifications: created server-side (a trigger fires the moment a new outing is posted) ---------- */
+const notifOn=()=>state.mode==='supabase'&&store&&store.markNotificationsRead;
+function unreadNotifs(){return state.notifications.filter(n=>!n.readAt&&state.events.some(e=>e.id===n.eventId))}
+function bellHTML(){
+  if(!(state.ready&&me&&notifOn()))return '';
+  const n=unreadNotifs().length;
+  return `<button class="bell" data-act="notif-open" aria-label="התראות${n?', '+n+' חדשות':''}">🔔${n?`<span class="dot">${n>9?'9+':n}</span>`:''}</button>`;
+}
+// Short Hebrew "time since" for a notification's own timestamp (not the outing's date - see notifText for that)
+function timeAgo(iso){
+  const s=Math.max(0,Math.round((Date.now()-new Date(iso).getTime())/1000));
+  if(s<60)return 'עכשיו';
+  const m=Math.round(s/60);if(m<60)return m===1?'לפני דקה':'לפני '+m+' דקות';
+  const h=Math.round(m/60);if(h<24)return h===1?'לפני שעה':'לפני '+h+' שעות';
+  const d=Math.round(h/24);return d===1?'לפני יום':'לפני '+d+' ימים';
+}
+// Who it's for ("everyone" or the group name(s)), reusing the same badge the outing cards already show
+function notifAudience(ev){
+  if(!ev.priv&&!ev.groupIds.length)return '🌍 לכולם';
+  const n=ev.groupIds.map(id=>{const g=state.groups.find(x=>x.id===id);return g?g.name:null}).filter(Boolean);
+  return '👥 '+(n.length?n.join(' · '):'קבוצה פרטית');
+}
+function notifRow(n){
+  const ev=state.events.find(e=>e.id===n.eventId);
+  if(!ev)return '';   // the outing is outside the loaded window (very old) or was deleted - nothing useful to show
+  const k=KINDS[ev.kind],d=new Date(ev.when);
+  return `<button class="nrow${n.readAt?'':' unread'}" data-act="notif-go" data-id="${esc(ev.id)}" style="--h:${k.h}">
+    <span class="tile sm">${k.e}</span>
+    <span class="ntext"><b>${esc(ev.place)}</b><span class="naud">${esc(notifAudience(ev))}</span><span class="nwhen">📅 ${DAYS[d.getDay()]} ${ddmm(d)} · ${hhmm(d)}</span></span>
+    <span class="nago">${timeAgo(n.createdAt)}</span></button>`;
+}
+function notifListHTML(){
+  const rows=state.notifications.map(notifRow).filter(Boolean).join('');
+  return `<div class="grab"></div>
+    <div class="dhead"><h2 class="dt">התראות</h2><button class="x" data-act="close" aria-label="סגור">✕</button></div>
+    ${rows?`<div class="nlist">${rows}</div>`:'<p class="dash" style="margin:8px 0 0">אין עדיין התראות. כשתיפתח יציאה חדשה בקבוצה שלכם (או לכולם), היא תופיע כאן.</p>'}
+    <div class="pad"></div>`;
+}
+function openNotifications(){
+  if(!me||!notifOn())return;
+  if(!state.notificationsOk){toast('צריך להריץ את migration העדכני ב-Supabase');return}
+  if(typeof Notification!=='undefined'&&Notification.permission==='default')Notification.requestPermission().catch(()=>{});
+  openSheet(notifListHTML(),'sheet-short');view={type:'notifs'};
+  const unread=unreadNotifs().map(n=>n.id);
+  if(unread.length){
+    state.notifications=state.notifications.map(n=>unread.includes(n.id)?Object.assign({},n,{readAt:new Date().toISOString()}):n);
+    store.markNotificationsRead(unread).catch(()=>{});
+    render();   // clears the bell badge right away; the open sheet already shows its own snapshot
+  }
+}
+function goToNotification(eventId){
+  closeSheet();
+  openDetail(eventId);
+}
+// Fires a real OS/browser notification for genuinely new items only - never for the backlog a first load finds,
+// and never a second time for one already shown. Clicking it jumps straight to that outing.
+let knownNotifIds=null;
+function notifyNewOnes(prev,next){
+  const ids=new Set(next.map(n=>n.id));
+  const firstRun=knownNotifIds===null;
+  const isNew=firstRun?[]:next.filter(n=>!n.readAt&&!knownNotifIds.has(n.id));
+  knownNotifIds=ids;
+  if(!isNew.length||typeof Notification==='undefined'||Notification.permission!=='granted')return;
+  isNew.forEach(n=>{
+    const ev=state.events.find(e=>e.id===n.eventId);if(!ev)return;
+    const d=new Date(ev.when);
+    try{
+      const note=new Notification('יציאה חדשה: '+ev.place,{
+        body:`${notifAudience(ev)} · ${DAYS[d.getDay()]} ${ddmm(d)} ${hhmm(d)}`,
+        tag:'yotz-outing-'+ev.id,icon:'icons/icon-192.png',badge:'icons/icon-192.png'});
+      note.onclick=()=>{try{window.focus()}catch(e){}goToNotification(ev.id);note.close()};
+    }catch(e){}
+  });
+}
 const groupsOn=()=>state.mode==='supabase'&&store&&store.createGroup;
 function groupsBarHTML(){
   if(!(state.ready&&me&&groupsOn()))return '';
@@ -1407,7 +1521,8 @@ function groupsHTML(){
     <p class="shsub">יציאות פרטיות שרק חברי הקבוצה רואים. יוצרים קבוצה ושולחים בוואטסאפ קישור הצטרפות.</p>
     <div class="glist">${rows}</div>
     <div class="fl">קבוצה חדשה</div>
-    <div class="dtrow"><input class="txt" id="g-new" maxlength="30" placeholder="לדוגמה: נשמות" autocomplete="off" enterkeyhint="done" aria-label="שם הקבוצה"><button class="ch" data-act="group-create">+ צור</button></div>`;
+    <div class="dtrow"><input class="txt" id="g-new" maxlength="30" placeholder="לדוגמה: נשמות" autocomplete="off" enterkeyhint="done" aria-label="שם הקבוצה"><button class="ch" data-act="group-create">+ צור</button></div>
+    <div class="pad"></div>`;
 }
 function groupHTML(g){
   const url=groupInviteUrl(g);
@@ -1425,7 +1540,7 @@ function groupHTML(g){
 function openGroups(){
   if(!me||!state.ready){toast('רגע, הלוח נטען');return}
   if(!state.groupsOk){toast('צריך להריץ את supabase-migration-v7.sql');return}
-  openSheet(groupsHTML());view={type:'groups'};
+  openSheet(groupsHTML(),'sheet-short');view={type:'groups'};
 }
 function openGroup(id){
   const g=state.groups.find(x=>x.id===id);if(!g)return;
@@ -1746,9 +1861,16 @@ function recCard(r,i){
     <p class="rdesc">${esc(r.description)}</p>
     ${r.why?`<div class="rwhy"><b>למה זה מתאים לכם</b>${esc(r.why)}</div>`:''}
     ${chips?`<div class="rchips">${chips}</div>`:''}${src}
-    <div class="actrow">${q?`<button class="actbtn" data-act="ai-nav" data-i="${i}">📍 נווט</button>`:''}<button class="actbtn" data-act="ai-more" data-i="${i}">ℹ️ מידע נוסף</button></div>
+    <div class="actrow">${q?`<button class="actbtn" data-act="ai-nav" data-i="${i}">📍 נווט</button>`:''}${moreInfoBtn(r)}</div>
     <button class="rcreate" data-act="ai-create" data-i="${i}">➕ צור יציאה</button>
   </article>`;
+}
+// A real link straight to the source page the AI actually used (with a text-fragment jump when we have a
+// quote), never an in-app synthesized answer. Hidden entirely when there is no genuine source to link to.
+function moreInfoBtn(r){
+  const url=AI.moreInfoUrl(r);
+  if(!url)return '';
+  return `<a class="actbtn" href="${esc(safeHref(url))}" target="_blank" rel="noopener noreferrer">${esc(AI.infoLabel(r))}</a>`;
 }
 function openAIResults(){
   const res=aiState.res;if(!res){openAIForm();return}
@@ -1914,6 +2036,8 @@ document.addEventListener('click',e=>{
   else if(a==='equip-add-live')addEquipLive(id);
   else if(a==='equip-edit')startEquipEdit(el.dataset.item);
   else if(a==='equip-save')saveEquipEdit(id);
+  else if(a==='notif-open')openNotifications();
+  else if(a==='notif-go')goToNotification(id);
   else if(a==='groups')openGroups();
   else if(a==='group-open')openGroup(el.dataset.g);
   else if(a==='group-create')createGroupNow();

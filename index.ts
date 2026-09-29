@@ -158,13 +158,28 @@ function shapeDetails(j: any) {
   return d;
 }
 
+// A short, clean phrase from the evidence snippet that actually backs a recommendation — used as a URL
+// text fragment (#:~:text=) so "More Information" can jump straight to the relevant part of the source
+// page instead of just its top. Trimmed to a word boundary; browsers that don't support text fragments
+// (or where the phrase doesn't literally appear on the page) just ignore it and open the page normally.
+function shortQuote(snippet: unknown): string | null {
+  let t = String(snippet ?? "").replace(/\s+/g, " ").trim();
+  if (t.length < 8) return null;
+  if (t.length > 110) {
+    t = t.slice(0, 110);
+    const cut = t.lastIndexOf(" ");
+    if (cut > 40) t = t.slice(0, cut);
+  }
+  return t || null;
+}
+
 /* ---------- output: keep only what the evidence supports ---------- */
-function shape(raw: any, evidence: { url: string }[], today: string, win: Win) {
+function shape(raw: any, evidence: { url: string; snippet?: string }[], today: string, win: Win) {
   const list = Array.isArray(raw?.recommendations) ? raw.recommendations : [];
   const out = list.map((r: any) => {
     const ids = [...new Set<number>((Array.isArray(r?.source_ids) ? r.source_ids : []).map((x: unknown) => Number(x)))]
       .filter((i) => Number.isInteger(i) && i >= 1 && i <= evidence.length) as number[];
-    const sources = ids.slice(0, 5).map((i) => ({ url: evidence[i - 1].url }));
+    const sources = ids.slice(0, 5).map((i) => ({ url: evidence[i - 1].url, quote: shortQuote(evidence[i - 1].snippet) }));
     const verified = sources.length > 0;
     const claimed = ISO.test(r?.event_date ?? "") ? r.event_date as string : null;
     // a dated event outside the window (or already over) is not a valid answer: it is dropped below, not just hidden
@@ -172,7 +187,9 @@ function shape(raw: any, evidence: { url: string }[], today: string, win: Win) {
     const date = claimed && !outOfWindow ? claimed : null;
     const time = date && /^([01]\d|2[0-3]):[0-5]\d$/.test(r?.event_time ?? "") ? r.event_time : null;
     const urlId = Number(r?.event_url_source_id);
-    const eventUrl = verified && Number.isInteger(urlId) && ids.includes(urlId) ? evidence[urlId - 1].url : null;
+    const hasEventUrl = verified && Number.isInteger(urlId) && ids.includes(urlId);
+    const eventUrl = hasEventUrl ? evidence[urlId - 1].url : null;
+    const eventQuote = hasEventUrl ? shortQuote(evidence[urlId - 1].snippet) : null;
     return {
       name: s(r?.name, 70), kind: KINDS.includes(r?.kind) ? r.kind : "other", type: s(r?.type, 30),
       location: s(r?.location, 80),
@@ -187,6 +204,7 @@ function shape(raw: any, evidence: { url: string }[], today: string, win: Win) {
       event_date: verified ? date : null,
       event_time: verified ? time : null,
       event_url: eventUrl,
+      event_quote: eventQuote,
       confidence: Math.min(verified ? 1 : 0.4, Math.max(0, Number(r?.confidence) || 0)),
       sources, _drop: outOfWindow,
     };

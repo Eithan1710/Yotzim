@@ -38,8 +38,11 @@ button{font:inherit;color:inherit;border:0;background:none;cursor:pointer;paddin
 
 .app{max-width:520px;margin:0 auto;padding:18px 16px 130px}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:2px 2px 4px}
+.hdract{display:flex;align-items:center;gap:8px;min-width:0}
 .who{background:var(--surface);border:1px solid var(--line);border-radius:99px;padding:8px 14px;font-weight:700;font-size:14.5px;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .brand{font:400 32px/1 var(--display);margin:0}
+.bell{position:relative;flex:0 0 auto;width:40px;height:40px;display:flex;align-items:center;justify-content:center;background:var(--surface);border:1px solid var(--line);border-radius:99px;font-size:19px;line-height:1}
+.bell .dot{position:absolute;top:-2px;left:-2px;min-width:18px;height:18px;padding:0 4px;border-radius:99px;background:#e5484d;color:#fff;font:800 11px/18px var(--display),system-ui;text-align:center;box-shadow:0 0 0 2px var(--bg)}
 h2.sec{font:400 19px/1 var(--display);margin:26px 2px 12px}
 
 /* ---------- Next outing: the one bold thing ---------- */
@@ -96,6 +99,11 @@ h2.sec{font:400 19px/1 var(--display);margin:26px 2px 12px}
 .sheet:focus{outline:none}
 .shown .scrim{opacity:1;pointer-events:auto}
 .shown .sheet{transform:none}
+/* A sheet with little content (e.g. "My Groups" with few/no groups) shrink-wraps to a short box that
+   hugs the very bottom of the screen, so its buttons end up cramped against the edge/home-indicator
+   area and are awkward to tap. Give such sheets a comfortable floor height and vertically center their
+   content in it, instead of leaving it pinned to the bottom. */
+.sheet.sheet-short{min-height:min(56vh,480px);display:flex;flex-direction:column;justify-content:center}
 .grab{width:40px;height:5px;border-radius:9px;background:var(--line);margin:0 auto 14px}
 .pad{padding-bottom:calc(20px + env(safe-area-inset-bottom,0px))}
 .dhead{display:flex;align-items:center;gap:12px}
@@ -409,6 +417,20 @@ textarea{-webkit-user-select:text;user-select:text}
 /* ---- crew label on outing cards ---- */
 .gbadge{display:inline-block;margin-inline-start:6px;font-size:12px;font-weight:800;padding:2px 9px;border-radius:99px;background:rgba(139,124,246,.16);color:#6B5BE0;vertical-align:middle}
 @media (prefers-color-scheme:dark){.gbadge{color:#B8ADFF}}
+
+/* ---- notifications ---- */
+.nlist{display:flex;flex-direction:column;gap:8px;margin-bottom:6px}
+.nrow{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:14px;background:var(--chip);text-align:start;width:100%;position:relative}
+.nrow.unread{background:hsl(var(--h) var(--tile-s) 94%)}
+@media (prefers-color-scheme:dark){.nrow.unread{background:hsl(var(--h) calc(var(--tile-s) - 20%) 22%)}}
+.nrow.unread::before{content:"";position:absolute;inset-inline-start:6px;top:50%;transform:translateY(-50%);width:8px;height:8px;border-radius:99px;background:#e5484d}
+.nrow .tile.sm{width:40px;height:40px;border-radius:12px;font-size:20px}
+.ntext{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.ntext b{font-size:15.5px;overflow-wrap:anywhere}
+.naud{font-size:12.5px;font-weight:800;color:#6B5BE0}
+@media (prefers-color-scheme:dark){.naud{color:#B8ADFF}}
+.nwhen{font-size:13px;color:var(--ink-2);font-weight:600}
+.nago{flex:none;font-size:12px;color:var(--ink-2);align-self:flex-start;white-space:nowrap}
 
 /* ---- groups ---- */
 .groupsbar{display:flex;align-items:center;gap:10px;width:100%;margin:0 0 16px;padding:11px 14px;border-radius:16px;background:var(--surface);border:1px solid var(--line);text-align:start;font-weight:700}

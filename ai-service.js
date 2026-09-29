@@ -88,11 +88,12 @@ function cleanRec(r){
   if(!r||typeof r!=='object')return null;
   const name=clip(r.name,70),desc=clip(r.description,320);
   if(!name||!desc)return null;
-  const sources=(Array.isArray(r.sources)?r.sources:[]).map(s=>({url:clip(s&&s.url,500),label:clip(s&&s.label,40)}))
+  const sources=(Array.isArray(r.sources)?r.sources:[]).map(s=>({url:clip(s&&s.url,500),label:clip(s&&s.label,40),quote:clip(s&&s.quote,140)||null}))
     .filter(s=>isHttp(s.url)).slice(0,5);
   const date=/^\d{4}-\d{2}-\d{2}$/.test(r.event_date||'')?r.event_date:null;
   const time=date&&/^([01]\d|2[0-3]):[0-5]\d$/.test(r.event_time||'')?r.event_time:null;
   const eventUrl=isHttp(r.event_url)?clip(r.event_url,500):null;
+  const eventQuote=eventUrl?(clip(r.event_quote,140)||null):null;
   return{
     name,kind:KIND_KEYS.includes(r.kind)?r.kind:'other',
     type:clip(r.type,30)||null,location:clip(r.location,80)||null,
@@ -100,7 +101,7 @@ function cleanRec(r){
     description:desc,why:clip(r.why_it_fits,260)||null,
     cost:clip(r.estimated_cost,50)||null,group:clip(r.group_fit,80)||null,age:clip(r.age_fit,80)||null,
     social:num(r.social_level,1,5),confidence:num(r.confidence,0,1),
-    isEvent:!!r.is_specific_event,date,time,eventUrl,
+    isEvent:!!r.is_specific_event,date,time,eventUrl,eventQuote,
     verified:sources.length>0,sources
   };
 }
@@ -166,16 +167,29 @@ function navQuery(r){
   if(r.venue)return r.venue+(r.location&&!r.venue.includes(r.location)?' '+r.location:'');
   return '';
 }
-function moreInfoUrl(r){
-  if(r.eventUrl)return r.eventUrl;
-  const first=r.sources.find(s=>!/instagram|facebook|tiktok/.test(s.url));
-  return first?first.url:'https://www.google.com/search?q='+encodeURIComponent((r.venue||r.name)+' '+(r.location||''));
+// Appends a URL Text Fragment (#:~:text=...) so supporting browsers (Chrome/Edge) auto-scroll to and
+// highlight the exact sentence the AI actually used, even on a long page with no anchors of its own.
+// Browsers that don't support it (Safari) simply ignore the fragment and load the page normally.
+function withFragment(url,quote){
+  if(!quote)return url;
+  try{
+    const u=new URL(url);
+    if(u.hash)return url; // page already points at a specific in-page anchor - don't override it
+    return url+'#:~:text='+encodeURIComponent(quote);
+  }catch(e){return url}
 }
-// Sets expectations correctly: an exact event page vs. just the site we found it on vs. a plain search
+// The real page the AI's info came from - never a search results page or a fabricated URL.
+// Returns null when there is genuinely no real source to link to (caller must hide the button then).
+function moreInfoUrl(r){
+  if(r.eventUrl)return withFragment(r.eventUrl,r.eventQuote);
+  const first=r.sources.find(s=>!/instagram|facebook|tiktok/.test(s.url));
+  return first?withFragment(first.url,first.quote):null;
+}
+// Sets expectations correctly: an exact event page vs. just the site we found it on
 function infoLabel(r){
   if(r.eventUrl)return '🔗 לעמוד האירוע';
-  if(r.sources.length)return '🌐 המקור';
-  return '🔍 חיפוש בגוגל';
+  if(r.sources.length)return '🌐 למקור המידע';
+  return '';
 }
 // What "Create outing" pre-fills in the existing form
 function toDraft(r){
