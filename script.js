@@ -132,6 +132,19 @@ function cleanEquipment(arr){
     addedBy:x&&x.addedBy?String(x.addedBy):null,assignedTo:x&&x.assignedTo?String(x.assignedTo):null}))
     .filter(x=>x.name).slice(0,60);
 }
+// What an outing's info is based on (set only when it was created from an AI idea; never shown as who
+// created it - that's always the real person in `by`). Re-validated here too, since this travels through
+// the database as plain JSON: only ever real http(s) URLs the AI actually cited, never a guess.
+const isHttpUrl=u=>/^https?:\/\//i.test(u||'');
+function cleanAiSources(v){
+  if(!v||typeof v!=='object')return null;
+  const sources=(Array.isArray(v.sources)?v.sources:[]).map(s=>({
+    url:String((s&&s.url)||'').slice(0,500),label:s&&s.label?String(s.label).slice(0,40):null,
+    quote:s&&s.quote?String(s.quote).slice(0,140):null})).filter(s=>isHttpUrl(s.url)).slice(0,5);
+  const eventUrl=isHttpUrl(v.eventUrl)?String(v.eventUrl).slice(0,500):null;
+  const eventQuote=eventUrl&&v.eventQuote?String(v.eventQuote).slice(0,140):null;
+  return(sources.length||eventUrl)?{sources,eventUrl,eventQuote}:null;
+}
 function setEvents(o,fresh){
   state.events=Object.entries(o).map(([id,v])=>{
     v=v||{};const rs=Object.create(null);
@@ -146,6 +159,7 @@ function setEvents(o,fresh){
     return{id:String(id),kind:has(KINDS,v.kind)?v.kind:'other',place:String(v.place||'').slice(0,80),when:Number(v.when)||0,
       transport:has(TRANSPORT,v.transport)?v.transport:'unknown',
       description:String(v.description||'').slice(0,500),by:v.by?String(v.by):null,createdAt:v.createdAt||null,
+      aiSources:cleanAiSources(v.aiSources),
       rsvps:rs,rides,ratings:cleanRatings(v.ratings),equipment:cleanEquipment(v.equipment),
       groupIds:Array.isArray(v.groupIds)?v.groupIds.map(String):[],priv:!!v.priv};
   }).filter(e=>e.when);
@@ -369,7 +383,8 @@ function makeSupabase(url,key){
       const rides=(e.rides||[]).map(r=>({id:r.id,driver:r.driver_name,seats:r.available_seats,
         pickup:r.pickup_location||'',note:r.note||'',passengers:(r.ride_passengers||[]).map(p=>p.passenger_name)}));
       events[e.id]={kind:kindFromLabel(e.type),place:e.title||e.location,when:new Date(y,m-1,d,hh,mm).getTime(),
-        transport:trFromLabel(e.transport),description:e.description||'',by:e.created_by||null,createdAt:e.created_at||null,rsvps:rs,rides,ratings:rmap[e.id]||{},equipment:emap[e.id]||[],
+        transport:trFromLabel(e.transport),description:e.description||'',by:e.created_by||null,createdAt:e.created_at||null,
+        aiSources:e.ai_sources||null,rsvps:rs,rides,ratings:rmap[e.id]||{},equipment:emap[e.id]||[],
         groupIds:(e.event_groups||[]).map(g=>g.group_id),priv:!!e.is_private};
     });
     firstDone=true;
@@ -406,7 +421,8 @@ function makeSupabase(url,key){
       const d=new Date(ev.when);
       const rows=await api('POST','events',{title:ev.place,type:KINDS[ev.kind].t,location:ev.place,
         date:iso(d),time:hhmm(d),transport:TRANSPORT[ev.transport].t,
-        description:ev.description||null,created_by:ev.by||null,is_private:!!(ev.groupIds&&ev.groupIds.length)},'return=representation');
+        description:ev.description||null,created_by:ev.by||null,is_private:!!(ev.groupIds&&ev.groupIds.length),
+        ai_sources:ev.aiSources||null},'return=representation');
       const id=rows[0].id;
       try{
         // private from the first instant (is_private above); the group links follow. If they fail the outing is removed, never left open.
@@ -1086,6 +1102,7 @@ function detailHTML(ev){
     <button class="x" data-act="close" aria-label="סגור">✕</button></div>`;
   if(!isPast)h+=shareBtn(ev)+`<div class="actrow">${navBtn(ev)}${calBtn(ev)}</div>`;
   if(ev.description)h+=`<p class="descr">${esc(ev.description)}</p>`;
+  h+=creatorHTML(ev)+aiSourcesHTML(ev);
   if(isPast){
     // a past outing is locked in: no delete option, anywhere in this sheet
     h+=grp('yes','🟢','הגיעו',g.yes)+equipmentHTML(ev,true)+ratingHTML(ev)+'<div class="pad"></div>';
@@ -1098,6 +1115,25 @@ function detailHTML(ev){
       +`<div class="rsvpbar">${btns(ev,my,'sb','לא מגיע')}</div>`;
   }
   return h;
+}
+// Who actually created this outing - always a real person, even one started from an AI idea (they still
+// had to open the form and save it). Kept visually separate from aiSourcesHTML below on purpose: creator
+// and "what the info is based on" are two different questions.
+function creatorHTML(ev){
+  if(!ev.by)return '';
+  return `<div class="creator">נוצר על ידי ${avEl(ev.by,' sm')}<b>${esc(ev.by)}</b></div>`;
+}
+// Present only when this outing was created from an AI idea: the AI's own real sources, carried over from
+// the suggestion so they aren't lost once the outing is saved. Reuses the exact same helpers and markup as
+// the AI results list (AI.moreInfoUrl/infoLabel, sourcesBlockHTML) - nothing new to keep in sync, and the
+// same guarantee applies: never a link that wasn't a real cited source.
+function aiSourcesHTML(ev){
+  const a=ev.aiSources;if(!a)return '';
+  const url=AI.moreInfoUrl(a);
+  const btn=url?`<a class="actbtn" href="${esc(safeHref(url))}" target="_blank" rel="noopener noreferrer">${esc(AI.infoLabel(a))}</a>`:'';
+  const list=sourcesBlockHTML(a.sources,'מקורות נוספים');
+  if(!btn&&!list)return '';
+  return `<div class="aisrc"><div class="aisrc-h">🤖 המידע על היציאה הזו מבוסס על הצעת AI</div>${btn?`<div class="actrow">${btn}</div>`:''}${list}</div>`;
 }
 function openDetail(id){
   const ev=state.events.find(e=>e.id===id);if(!ev)return;
@@ -1147,6 +1183,7 @@ function openForm(editEv,draft){
     kind:editing?editEv.kind:(draft?draft.kind:null),
     transport:editing?editEv.transport:(has(TRANSPORT,LS.get('yotz.tr'))?LS.get('yotz.tr'):'unknown'),
     dm:editing?dayModeOf(editEv.when):(d.getDate()===new Date().getDate()?'today':'tomorrow'),
+    aiSources:!editing&&draft?draft.aiSources||null:null,
     equipment:[],groupIds:[]};
   if(draft&&draft.date&&draft.date>=iso(new Date()))form.dm='custom';   // an event with a real date: start from it
   const kinds=Object.entries(KINDS).map(([k,v])=>`<button class="opt" data-act="kind" data-v="${k}"><span class="e">${v.e}</span>${v.t}</button>`).join('');
@@ -1236,7 +1273,7 @@ function submitForm(){
     enqueue(()=>store.updateEvent(id,{kind:form.kind,place,when,transport:form.transport,description}))
       .then(()=>toast('היציאה עודכנה')).catch(writeFail);
   }else{
-    const ev={kind:form.kind,place,when,transport:form.transport,description,by:me.id,rsvps:{[me.id]:'yes'}};
+    const ev={kind:form.kind,place,when,transport:form.transport,description,by:me.id,rsvps:{[me.id]:'yes'},aiSources:form.aiSources||null};
     const equipToAdd=form.equipment.slice();
     ev.groupIds=form.groupIds.filter(g=>state.groups.some(x=>x.id===g));   // only crews I really belong to
     closeSheet();
@@ -1843,6 +1880,18 @@ async function runAI(){
   }else toast(msg);
 }
 const chip=(e,t)=>`<span class="rchip">${e} ${esc(t)}</span>`;
+// One source as a tappable chip: icon + site name + (Instagram only) the real handle straight from its
+// URL - never just bare "@handle" text, always the actual link. Shared by the AI results list and by a
+// saved outing's own "sources" section, so both look and behave the same.
+function srcChipHTML(s){
+  const m=AI.sourceMeta(s);
+  return `<a href="${esc(safeHref(s.url))}" target="_blank" rel="noopener noreferrer">${m.icon} ${esc(m.label)}${m.handle?' — '+esc(m.handle):''}</a>`;
+}
+function sourcesBlockHTML(sources,heading){
+  if(!sources.length)return '';
+  const labels=[...new Set(sources.map(s=>AI.sourceLabel(s)))];
+  return `<details class="rsrc"><summary>${esc(heading)} · ${esc(labels.join(' · '))}</summary><div class="rlinks">${sources.map(srcChipHTML).join('')}</div></details>`;
+}
 function recCard(r,i){
   const k=KINDS[r.kind]||KINDS.other;
   const q=AI.navQuery(r);
@@ -1852,9 +1901,7 @@ function recCard(r,i){
   const chips=(r.cost?chip('💰',r.cost):'')+(r.group?chip('👥',r.group):'')+(r.age?chip('🎂',r.age):'')
     +(r.social!=null?chip('🔥','רמה חברתית '+r.social+'/5'):'')+dateChip
     +(r.verified?'':'<span class="rchip warn">רעיון כללי, לא אומת</span>');
-  const labels=[...new Set(r.sources.map(s=>AI.sourceLabel(s)))];
-  const src=r.sources.length
-    ?`<details class="rsrc"><summary>מקורות · ${esc(labels.join(' · '))}</summary><div class="rlinks">${r.sources.map(s=>`<a href="${esc(safeHref(s.url))}" target="_blank" rel="noopener noreferrer" dir="ltr">${esc(AI.sourceLabel(s))}</a>`).join('')}</div></details>`:'';
+  const src=sourcesBlockHTML(r.sources,'מקורות');
   return `<article class="rec" style="--h:${k.h}">
     <div class="rtop"><span class="tile">${k.e}</span><div class="ctxt"><div class="cplace">${esc(r.name)}</div>
       <div class="cwhen">${r.location?'📍 '+esc(r.location):''}${r.type?(r.location?' · ':'')+esc(r.type):''}</div></div></div>

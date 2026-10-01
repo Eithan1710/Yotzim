@@ -154,13 +154,25 @@ async function details(r){
 
 /* ---------- small helpers for the UI ---------- */
 const SITE={'instagram.com':'Instagram','facebook.com':'Facebook','reddit.com':'Reddit','tiktok.com':'TikTok','eventbuzz.co.il':'Eventbuzz','tripadvisor.com':'Tripadvisor'};
-function sourceLabel(s){
+const SITE_ICON={'instagram.com':'📸','facebook.com':'📘','tiktok.com':'🎵'};
+// A real Instagram handle, read straight off the URL's own path - never invented. Only a plain profile
+// URL (instagram.com/<username>) has one; a post/reel/story/UI path does not, so those get null.
+const IG_NO_HANDLE=new Set(['p','reel','reels','stories','explore','accounts','tv','direct','web']);
+function instaHandle(host,url){
+  if(host!=='instagram.com')return null;
   try{
-    const h=new URL(s.url).hostname.replace(/^www\./,'');
-    for(const k in SITE)if(h===k||h.endsWith('.'+k))return SITE[k];
-    return s.label||h;
-  }catch(e){return s.label||'אתר'}
+    const seg=new URL(url).pathname.split('/').filter(Boolean)[0];
+    return seg&&!IG_NO_HANDLE.has(seg.toLowerCase())?'@'+seg:null;
+  }catch(e){return null}
 }
+// icon + display name + (Instagram only) handle, all derived from the source's own real URL
+function sourceMeta(s){
+  let host='';try{host=new URL(s.url).hostname.replace(/^www\./,'')}catch(e){}
+  let label=s.label||'אתר',icon='🌐';
+  for(const k in SITE)if(host===k||host.endsWith('.'+k)){label=SITE[k];icon=SITE_ICON[k]||'🌐';break}
+  return{icon,label,handle:instaHandle(host,s.url)};
+}
+function sourceLabel(s){return sourceMeta(s).label}
 // Text to search for on a map. Only when the recommendation names a real venue/address (never for a general idea).
 function navQuery(r){
   if(r.address)return r.address;
@@ -178,24 +190,38 @@ function withFragment(url,quote){
     return url+'#:~:text='+encodeURIComponent(quote);
   }catch(e){return url}
 }
-// The real page the AI's info came from - never a search results page or a fabricated URL.
+// The one real link to point to: the page the AI itself flagged as this exact event/venue's own page,
+// or - if it didn't flag one - simply the first real source it actually cited, whichever site that's on.
+// Instagram/Facebook/TikTok are legitimate real sources too and are never excluded here; this never picks
+// a search-results page and never invents a URL - it only ever returns a URL that was really in `sources`.
+function resolvedLink(r){
+  if(r.eventUrl)return{url:r.eventUrl,quote:r.eventQuote,isEvent:true};
+  const first=r.sources[0];
+  return first?{url:first.url,quote:first.quote,isEvent:false,icon:sourceMeta(first).icon}:null;
+}
 // Returns null when there is genuinely no real source to link to (caller must hide the button then).
 function moreInfoUrl(r){
-  if(r.eventUrl)return withFragment(r.eventUrl,r.eventQuote);
-  const first=r.sources.find(s=>!/instagram|facebook|tiktok/.test(s.url));
-  return first?withFragment(first.url,first.quote):null;
+  const x=resolvedLink(r);
+  return x?withFragment(x.url,x.quote):null;
 }
-// Sets expectations correctly: an exact event page vs. just the site we found it on
+// Sets expectations correctly: an exact event page vs. which site we actually found the info on
 function infoLabel(r){
-  if(r.eventUrl)return '🔗 לעמוד האירוע';
-  if(r.sources.length)return '🌐 למקור המידע';
-  return '';
+  const x=resolvedLink(r);if(!x)return '';
+  if(x.isEvent)return '🔗 לעמוד האירוע';
+  if(x.icon==='📸')return '📸 לעמוד האינסטגרם';
+  if(x.icon==='📘')return '📘 לעמוד הפייסבוק';
+  return '🌐 למקור המידע';
 }
-// What "Create outing" pre-fills in the existing form
+// What "Create outing" pre-fills in the existing form. The AI's real sources ride along too (unchanged,
+// already validated above) so that once the outing is saved, the app can still show exactly where its
+// information came from - kept separate from who actually created the outing.
 function toDraft(r){
   const place=clip(navQuery(r)?(r.venue||r.address):(r.name),60);
-  return{kind:r.kind,place,description:clip(r.description,500),date:r.date,time:r.time};
+  const aiSources=(r.sources.length||r.eventUrl)
+    ?{sources:r.sources.map(s=>({url:s.url,label:s.label,quote:s.quote})),eventUrl:r.eventUrl||null,eventQuote:r.eventQuote||null}
+    :null;
+  return{kind:r.kind,place,description:clip(r.description,500),date:r.date,time:r.time,aiSources};
 }
 
-window.AIOuting={suggest,details,recRef,buildContext,sourceLabel,navQuery,moreInfoUrl,infoLabel,toDraft,AIError,MSG};
+window.AIOuting={suggest,details,recRef,buildContext,sourceLabel,sourceMeta,navQuery,moreInfoUrl,infoLabel,toDraft,AIError,MSG};
 })();
