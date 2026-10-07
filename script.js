@@ -13,6 +13,11 @@ const TRANSPORT={
 };
 const DAYS=['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
 const PAST_AFTER=3*3600e3; // an outing moves to "past" 3 hours after it starts
+// Past outings stay in the database untouched; they are only hidden from every user-facing view.
+// Flip to true to bring back the "🕘 עבר" section, past-outing sheets, ratings and history.
+const SHOW_PAST=false;
+const isPast=ev=>!!ev&&ev.when+PAST_AFTER<Date.now();
+const isVisible=ev=>!!ev&&(SHOW_PAST||!isPast(ev));
 
 /* ---------- helpers ---------- */
 const $=s=>document.querySelector(s);
@@ -109,11 +114,13 @@ function clearDeepLink(){
 }
 function maybeOpenDeepLink(){
   if(!pendingEventId||!me||sheetEl)return;
-  if(!state.events.some(e=>e.id===pendingEventId)){
+  const target=state.events.find(e=>e.id===pendingEventId);
+  if(!target){
     // only give up after the server answered (the cached board may simply be older than the link)
     if(state.fresh){clearDeepLink();toast('היציאה הזו כבר לא קיימת')}
     return;
   }
+  if(!isVisible(target)){clearDeepLink();toast('היציאה הזו כבר עברה');return}
   const id=pendingEventId;clearDeepLink();
   openDetail(id);
 }
@@ -803,7 +810,7 @@ function render(){
   }
   const now=Date.now();
   const up=state.events.filter(e=>e.when+PAST_AFTER>=now).sort((a,b)=>a.when-b.when);
-  const past=state.events.filter(e=>e.when+PAST_AFTER<now).sort((a,b)=>b.when-a.when).slice(0,15);
+  const past=SHOW_PAST?state.events.filter(e=>e.when+PAST_AFTER<now).sort((a,b)=>b.when-a.when).slice(0,15):[];
   let h=head()+installUI()+aiCardHTML()+groupsBarHTML()+'<h2 class="sec">🔥 קרוב</h2>';
   if(!up.length){
     h+='<div class="empty-state">אין יציאות קרובות.<br>לחצו על ״+ יציאה״ ופתחו את הראשונה.</div>';
@@ -1137,6 +1144,7 @@ function aiSourcesHTML(ev){
 }
 function openDetail(id){
   const ev=state.events.find(e=>e.id===id);if(!ev)return;
+  if(!isVisible(ev)){toast('היציאה הזו כבר עברה');return}
   openSheet(detailHTML(ev));view={type:'detail',id};
 }
 function refreshSheet(){
@@ -1145,7 +1153,7 @@ function refreshSheet(){
   const st=sh.scrollTop;
   if(view.type==='detail'){
     const ev=state.events.find(e=>e.id===view.id);
-    if(!ev){closeSheet();return}
+    if(!ev||!isVisible(ev)){closeSheet();return}
     sh.innerHTML=detailHTML(ev);sh.scrollTop=st;
   }else if(view.type==='groups'){
     const keep=($('#g-new')||{}).value||'';
@@ -1471,7 +1479,7 @@ function groupInviteUrl(g){
 }
 /* ---------- notifications: created server-side (a trigger fires the moment a new outing is posted) ---------- */
 const notifOn=()=>state.mode==='supabase'&&store&&store.markNotificationsRead;
-function unreadNotifs(){return state.notifications.filter(n=>!n.readAt&&state.events.some(e=>e.id===n.eventId))}
+function unreadNotifs(){return state.notifications.filter(n=>!n.readAt&&state.events.some(e=>e.id===n.eventId&&isVisible(e)))}
 function bellHTML(){
   if(!(state.ready&&me&&notifOn()))return '';
   const n=unreadNotifs().length;
@@ -1493,7 +1501,7 @@ function notifAudience(ev){
 }
 function notifRow(n){
   const ev=state.events.find(e=>e.id===n.eventId);
-  if(!ev)return '';   // the outing is outside the loaded window (very old) or was deleted - nothing useful to show
+  if(!ev||!isVisible(ev))return '';   // outside the loaded window, deleted, or already over (past outings are hidden)
   const k=KINDS[ev.kind],d=new Date(ev.when);
   return `<button class="nrow${n.readAt?'':' unread'}" data-act="notif-go" data-id="${esc(ev.id)}" style="--h:${k.h}">
     <span class="tile sm">${k.e}</span>
@@ -1533,7 +1541,7 @@ function notifyNewOnes(prev,next){
   knownNotifIds=ids;
   if(!isNew.length||typeof Notification==='undefined'||Notification.permission!=='granted')return;
   isNew.forEach(n=>{
-    const ev=state.events.find(e=>e.id===n.eventId);if(!ev)return;
+    const ev=state.events.find(e=>e.id===n.eventId);if(!isVisible(ev))return;
     const d=new Date(ev.when);
     try{
       const note=new Notification('יציאה חדשה: '+ev.place,{
@@ -1713,7 +1721,7 @@ function showGate(){
 function paintInvite(){
   const box=$('#invite');if(!box)return;
   const ev=pendingEventId&&state.events.find(e=>e.id===pendingEventId);
-  if(!ev){box.hidden=true;return}
+  if(!isVisible(ev)){box.hidden=true;return}
   const k=KINDS[ev.kind],n=groups(ev).yes.length;
   box.hidden=false;
   box.innerHTML=`<div class="inv-k">הזמינו אותך 👋</div><div class="inv-t">${k.e} ${esc(ev.place)}</div>
@@ -2127,7 +2135,11 @@ document.addEventListener('keydown',e=>{
   if((e.key==='Enter'||e.key===' ')&&e.target.getAttribute&&e.target.getAttribute('role')==='button'){e.preventDefault();e.target.click()}
 });
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)render()});
-setInterval(render,60000);
+setInterval(()=>{
+  render();
+  // an open outing that just crossed into "past" closes (without re-rendering sheets that are still current)
+  if(view&&view.type==='detail'&&!isVisible(state.events.find(e=>e.id===view.id)))closeSheet();
+},60000);
 
 /* ---------- boot ---------- */
 (async function boot(){
